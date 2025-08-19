@@ -94,50 +94,51 @@ class OpenWebUIClient:
         # 获取完整对话历史
         messages = self.get_conversation_history(user_id)
         
-        # 如果这是新对话，添加系统提示
-        if len(messages) == 1:  # 只有用户的第一条消息
-            system_prompt = {
-                "role": "system", 
-                "content": "你是BestVPN AI的智能助手。请直接回答用户的问题，不要尝试使用任何工具或进行搜索。基于你的已有知识提供有用的回答。保持回答简洁、友好和有帮助。如果需要最新信息，请告知用户你的知识有时间限制，建议他们查询最新资源。"
-            }
-            messages.insert(0, system_prompt)
-        
         payload = {
             "model": model,
             "messages": messages,
-            "stream": False,
-            "max_tokens": 3000,
+            "stream": True,
+            "max_tokens": 4000,
             "temperature": 0.7
         }
         
         try:
             logger.info(f"Sending request to OpenWebUI: {url}")
             logger.info(f"Messages count: {len(messages)}")
-            response = requests.post(url, headers=headers, json=payload, timeout=60)
+            response = requests.post(url, headers=headers, json=payload, timeout=120, stream=True)
             logger.info(f"Response status: {response.status_code}")
             
             if response.status_code == 400:
                 logger.error(f"Bad request response: {response.text}")
                 
             response.raise_for_status()
-            data = response.json()
-            logger.info(f"Response data keys: {list(data.keys()) if isinstance(data, dict) else 'Not dict'}")
             
-            ai_response = None
-            if 'choices' in data and len(data['choices']) > 0:
-                ai_response = data['choices'][0]['message']['content']
-            elif 'message' in data:
-                ai_response = data['message']
-            elif isinstance(data, str):
-                ai_response = data
+            # 处理流式响应
+            full_response = ""
+            for line in response.iter_lines():
+                if line:
+                    line = line.decode('utf-8')
+                    if line.startswith('data: '):
+                        data_str = line[6:]  # 移除 'data: ' 前缀
+                        if data_str.strip() == '[DONE]':
+                            break
+                        try:
+                            data = json.loads(data_str)
+                            if 'choices' in data and len(data['choices']) > 0:
+                                delta = data['choices'][0].get('delta', {})
+                                content = delta.get('content', '')
+                                if content:
+                                    full_response += content
+                        except json.JSONDecodeError:
+                            continue
             
-            if ai_response:
+            if full_response.strip():
                 # 添加AI回复到历史
-                self.add_to_conversation(user_id, "assistant", ai_response)
-                return ai_response
+                self.add_to_conversation(user_id, "assistant", full_response.strip())
+                return full_response.strip()
             else:
-                logger.warning(f"Unexpected response format: {data}")
-                return "抱歉，我遇到了一些问题，请稍后再试。"
+                logger.warning("No content received from streaming response")
+                return "抱歉，我没有收到完整的回复，请稍后再试。"
                 
         except requests.exceptions.HTTPError as e:
             logger.error(f"HTTP error: {e}")
