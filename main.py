@@ -51,22 +51,40 @@ class OpenWebUIClient:
             "model": model,
             "messages": [
                 {"role": "user", "content": message}
-            ]
+            ],
+            "stream": False,
+            "max_tokens": 2000,
+            "temperature": 0.7
         }
         
         try:
+            logger.info(f"Sending request to OpenWebUI: {url}")
             response = requests.post(url, headers=headers, json=payload, timeout=30)
+            logger.info(f"Response status: {response.status_code}")
+            
+            if response.status_code == 400:
+                logger.error(f"Bad request response: {response.text}")
+                
             response.raise_for_status()
             data = response.json()
+            logger.info(f"Response data keys: {list(data.keys()) if isinstance(data, dict) else 'Not dict'}")
             
             if 'choices' in data and len(data['choices']) > 0:
                 return data['choices'][0]['message']['content']
+            elif 'message' in data:
+                return data['message']
+            elif isinstance(data, str):
+                return data
             else:
                 logger.warning(f"Unexpected response format: {data}")
                 return "抱歉，我遇到了一些问题，请稍后再试。"
                 
+        except requests.exceptions.HTTPError as e:
+            logger.error(f"HTTP error: {e}")
+            logger.error(f"Response content: {e.response.text if hasattr(e, 'response') else 'No response'}")
+            return "抱歉，我现在无法处理您的请求，请稍后再试。"
         except requests.exceptions.RequestException as e:
-            logger.error(f"OpenWebUI API error: {e}")
+            logger.error(f"Request error: {e}")
             return "抱歉，我现在无法处理您的请求，请稍后再试。"
 
 bot = TelegramBot()
