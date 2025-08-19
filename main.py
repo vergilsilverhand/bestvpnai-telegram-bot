@@ -43,6 +43,14 @@ class TelegramBot:
     def edit_message(self, chat_id, message_id, text):
         """Edit existing message in Telegram chat"""
         url = f"{self.api_url}/editMessageText"
+        
+        # 清理文本，避免Markdown格式问题
+        text = text.replace('_', '\\_').replace('*', '\\*').replace('[', '\\[').replace('`', '\\`')
+        
+        # 限制消息长度
+        if len(text) > 4096:
+            text = text[:4090] + "..."
+        
         payload = {
             'chat_id': chat_id,
             'message_id': message_id,
@@ -52,10 +60,16 @@ class TelegramBot:
         
         try:
             response = requests.post(url, json=payload, timeout=10)
+            if response.status_code != 200:
+                # 如果Markdown失败，尝试纯文本
+                payload['parse_mode'] = None
+                response = requests.post(url, json=payload, timeout=10)
             response.raise_for_status()
             return response.json()
         except requests.exceptions.RequestException as e:
             logger.error(f"Failed to edit message: {e}")
+            if hasattr(e, 'response'):
+                logger.error(f"Response content: {e.response.text}")
             return None
 
 class OpenWebUIClient:
@@ -101,20 +115,30 @@ class OpenWebUIClient:
     
     def filter_ai_response(self, text):
         """过滤AI响应，移除工具调用JSON和不必要的内容"""
+        if not text:
+            return ""
         
-        # 移除工具调用JSON块
-        text = re.sub(r'工具调用：\s*\{[^}]*\}', '', text, flags=re.MULTILINE | re.DOTALL)
+        # 移除工具调用JSON块 - 更精确的匹配
+        text = re.sub(r'工具调用：\s*\{.*?\}', '', text, flags=re.MULTILINE | re.DOTALL)
         text = re.sub(r'\{[^}]*"tool[^}]*\}', '', text, flags=re.MULTILINE | re.DOTALL)
+        text = re.sub(r'\{[^}]*"parameters"[^}]*\}', '', text, flags=re.MULTILINE | re.DOTALL)
         
-        # 移除多余的空行
-        text = re.sub(r'\n\s*\n\s*\n', '\n\n', text)
-        
-        # 移除"我正在查找相关信息..."等提示文字后的多余空白
+        # 移除系统提示和搜索状态
         text = re.sub(r'我正在查找相关信息[.…]*\s*', '', text)
         text = re.sub(r'我将为您查询[^.]*\.\s*', '', text)
         text = re.sub(r'（系统将执行[^）]*）\s*', '', text)
+        text = re.sub(r'我的知识主要截至[^.]*\.\s*对于[^.]*，[^.]*\.\s*', '', text)
         
-        return text.strip()
+        # 清理多余空行
+        text = re.sub(r'\n\s*\n\s*\n+', '\n\n', text)
+        text = re.sub(r'^\s*\n+', '', text)
+        
+        # 如果文本太短或只包含搜索提示，返回友好消息
+        cleaned = text.strip()
+        if len(cleaned) < 20 or not cleaned:
+            return ""
+            
+        return cleaned
     
     def stream_chat_completion(self, bot, chat_id, user_id, message, model="AI.x-ai/grok-3-mini"):
         """流式处理AI响应并实时更新Telegram消息"""
@@ -171,12 +195,13 @@ class OpenWebUIClient:
                                     full_response += content
                                     update_count += 1
                                     
-                                    # 每50个字符或每10次更新才更新一次消息，避免频繁API调用
-                                    if update_count % 10 == 0 or len(full_response) - len(last_update) > 100:
+                                    # 每20次更新或每200个字符才更新一次消息，避免频繁API调用
+                                    if update_count % 20 == 0 or len(full_response) - len(last_update) > 200:
                                         filtered_response = self.filter_ai_response(full_response)
-                                        if filtered_response and filtered_response != last_update:
-                                            bot.edit_message(chat_id, message_id, filtered_response)
-                                            last_update = filtered_response
+                                        if filtered_response and len(filtered_response.strip()) > 10 and filtered_response != last_update:
+                                            edit_result = bot.edit_message(chat_id, message_id, filtered_response)
+                                            if edit_result:
+                                                last_update = filtered_response
                         except json.JSONDecodeError:
                             continue
             
