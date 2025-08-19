@@ -2,6 +2,7 @@ import os
 import logging
 import requests
 import json
+import re
 from flask import Flask, request, jsonify
 from collections import defaultdict
 
@@ -37,6 +38,24 @@ class TelegramBot:
             return response.json()
         except requests.exceptions.RequestException as e:
             logger.error(f"Failed to send message: {e}")
+            return None
+    
+    def edit_message(self, chat_id, message_id, text):
+        """Edit existing message in Telegram chat"""
+        url = f"{self.api_url}/editMessageText"
+        payload = {
+            'chat_id': chat_id,
+            'message_id': message_id,
+            'text': text,
+            'parse_mode': 'Markdown'
+        }
+        
+        try:
+            response = requests.post(url, json=payload, timeout=10)
+            response.raise_for_status()
+            return response.json()
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Failed to edit message: {e}")
             return None
 
 class OpenWebUIClient:
@@ -79,6 +98,103 @@ class OpenWebUIClient:
     def clear_conversation(self, user_id):
         """Clear user's conversation history"""
         user_conversations[user_id] = []
+    
+    def filter_ai_response(self, text):
+        """过滤AI响应，移除工具调用JSON和不必要的内容"""
+        
+        # 移除工具调用JSON块
+        text = re.sub(r'工具调用：\s*\{[^}]*\}', '', text, flags=re.MULTILINE | re.DOTALL)
+        text = re.sub(r'\{[^}]*"tool[^}]*\}', '', text, flags=re.MULTILINE | re.DOTALL)
+        
+        # 移除多余的空行
+        text = re.sub(r'\n\s*\n\s*\n', '\n\n', text)
+        
+        # 移除"我正在查找相关信息..."等提示文字后的多余空白
+        text = re.sub(r'我正在查找相关信息[.…]*\s*', '', text)
+        text = re.sub(r'我将为您查询[^.]*\.\s*', '', text)
+        text = re.sub(r'（系统将执行[^）]*）\s*', '', text)
+        
+        return text.strip()
+    
+    def stream_chat_completion(self, bot, chat_id, user_id, message, model="AI.x-ai/grok-3-mini"):
+        """流式处理AI响应并实时更新Telegram消息"""
+        url = f"{self.base_url}/api/chat/completions"
+        headers = {
+            'Authorization': f'Bearer {self.api_key}',
+            'Content-Type': 'application/json'
+        }
+        
+        # 添加用户消息到历史
+        self.add_to_conversation(user_id, "user", message)
+        
+        # 获取完整对话历史
+        messages = self.get_conversation_history(user_id)
+        
+        payload = {
+            "model": model,
+            "messages": messages,
+            "stream": True,
+            "max_tokens": 4000,
+            "temperature": 0.7
+        }
+        
+        # 发送初始状态消息
+        status_msg = bot.send_message(chat_id, "🤔 正在思考...")
+        if not status_msg:
+            return "抱歉，发送消息时出现问题。"
+        
+        message_id = status_msg['result']['message_id']
+        
+        try:
+            logger.info(f"Sending streaming request to OpenWebUI: {url}")
+            response = requests.post(url, headers=headers, json=payload, timeout=120, stream=True)
+            response.raise_for_status()
+            
+            # 处理流式响应
+            full_response = ""
+            last_update = ""
+            update_count = 0
+            
+            for line in response.iter_lines():
+                if line:
+                    line = line.decode('utf-8')
+                    if line.startswith('data: '):
+                        data_str = line[6:]
+                        if data_str.strip() == '[DONE]':
+                            break
+                        try:
+                            data = json.loads(data_str)
+                            if 'choices' in data and len(data['choices']) > 0:
+                                delta = data['choices'][0].get('delta', {})
+                                content = delta.get('content', '')
+                                if content:
+                                    full_response += content
+                                    update_count += 1
+                                    
+                                    # 每50个字符或每10次更新才更新一次消息，避免频繁API调用
+                                    if update_count % 10 == 0 or len(full_response) - len(last_update) > 100:
+                                        filtered_response = self.filter_ai_response(full_response)
+                                        if filtered_response and filtered_response != last_update:
+                                            bot.edit_message(chat_id, message_id, filtered_response)
+                                            last_update = filtered_response
+                        except json.JSONDecodeError:
+                            continue
+            
+            # 最终过滤和更新
+            final_response = self.filter_ai_response(full_response)
+            if final_response:
+                bot.edit_message(chat_id, message_id, final_response)
+                # 添加AI回复到历史
+                self.add_to_conversation(user_id, "assistant", final_response)
+                return final_response
+            else:
+                bot.edit_message(chat_id, message_id, "抱歉，我没有收到完整的回复，请稍后再试。")
+                return "抱歉，我没有收到完整的回复，请稍后再试。"
+                
+        except Exception as e:
+            logger.error(f"Streaming error: {e}")
+            bot.edit_message(chat_id, message_id, "抱歉，处理您的请求时出现了问题，请稍后再试。")
+            return "抱歉，处理您的请求时出现了问题，请稍后再试。"
     
     def chat_completion(self, user_id, message, model="AI.x-ai/grok-3-mini"):
         """Send chat completion request to OpenWebUI with conversation context"""
@@ -197,11 +313,8 @@ def webhook():
             bot.send_message(chat_id, "✅ 对话历史已清除，我们可以开始新的对话了！")
             return jsonify({'ok': True})
         
-        # Get response from OpenWebUI with conversation context
-        ai_response = openwebui_client.chat_completion(user_id, user_message)
-        
-        # Send response back to user
-        bot.send_message(chat_id, ai_response)
+        # Get streaming response from OpenWebUI with real-time updates
+        ai_response = openwebui_client.stream_chat_completion(bot, chat_id, user_id, user_message)
         
         return jsonify({'ok': True})
         
