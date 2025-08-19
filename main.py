@@ -245,33 +245,32 @@ class OpenWebUIClient:
                                     full_response += content
                                     update_count += 1
                                     
-                                    # 流式更新正式回答
+                                    # 流式更新正式回答（无过滤，显示原始内容）
                                     if update_count % 10 == 0 or len(display_response) - len(last_update) > 100:
                                         if len(display_response.strip()) > 10:
+                                            # 显示原始content，不过滤
                                             bot.edit_message(chat_id, message_id, display_response)
                                             last_update = display_response
                                             
                         except json.JSONDecodeError:
                             continue
             
-            # 最终处理和更新
+            # 最终处理和更新（无过滤，显示原始内容）
             if display_response:
-                # 如果有正式回答内容，使用它
+                # 显示原始content内容，不过滤
                 final_response = display_response.strip()
                 if final_response:
                     bot.edit_message(chat_id, message_id, final_response)
                     self.add_to_conversation(user_id, "assistant", final_response)
                     return final_response
             
-            # 如果没有content，可能所有内容都在reasoning中
-            # 这种情况下，显示推理内容但标注为思考过程
+            # 如果没有content，显示原始reasoning内容
             if thinking_content and not display_response:
-                clean_thinking = self.filter_ai_response(thinking_content)
-                if clean_thinking and len(clean_thinking.strip()) > 20:
-                    response_with_note = f"🤔 *AI推理过程:*\n\n{clean_thinking}"
+                if len(thinking_content.strip()) > 20:
+                    response_with_note = f"🤔 *AI推理过程（原始）:*\n\n{thinking_content}"
                     bot.edit_message(chat_id, message_id, response_with_note)
-                    self.add_to_conversation(user_id, "assistant", clean_thinking)
-                    return clean_thinking
+                    self.add_to_conversation(user_id, "assistant", thinking_content)
+                    return thinking_content
             
             bot.edit_message(chat_id, message_id, "抱歉，我没有收到完整的回复，请稍后再试。")
             return "抱歉，我没有收到完整的回复，请稍后再试。"
