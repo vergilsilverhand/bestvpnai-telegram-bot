@@ -210,7 +210,7 @@ class OpenWebUIClient:
             bot.edit_message(chat_id, message_id, "抱歉，处理您的请求时出现了问题，请稍后再试。")
             return "抱歉，处理您的请求时出现了问题，请稍后再试。"
     
-    def chat_completion(self, user_id, message, model="AI.x-ai/grok-3-mini"):
+    def chat_completion(self, user_id, message, model="orm_xiaoming.xiaoming/qwen3-32b-instruct-tool"):
         """Send chat completion request to OpenWebUI with conversation context"""
         url = f"{self.base_url}/api/chat/completions"
         headers = {
