@@ -157,7 +157,7 @@ class OpenWebUIClient:
         payload = {
             "model": model,
             "messages": messages,
-            "stream": True,
+            "stream": False,  # 禁用流式，等待完整结果
             "max_tokens": 4000,
             "temperature": 0.7
         }
@@ -170,48 +170,35 @@ class OpenWebUIClient:
         message_id = status_msg['result']['message_id']
         
         try:
-            logger.info(f"Sending streaming request to OpenWebUI: {url}")
-            response = requests.post(url, headers=headers, json=payload, timeout=120, stream=True)
+            logger.info(f"Sending request to OpenWebUI: {url}")
+            response = requests.post(url, headers=headers, json=payload, timeout=180)
             response.raise_for_status()
             
-            # 处理流式响应
+            # 处理完整响应（包含工具调用结果）
+            data = response.json()
+            logger.info(f"Response data keys: {list(data.keys()) if isinstance(data, dict) else 'Not dict'}")
+            
             full_response = ""
-            last_update = ""
-            update_count = 0
+            if 'choices' in data and len(data['choices']) > 0:
+                full_response = data['choices'][0]['message']['content']
+            elif 'message' in data:
+                full_response = data['message']
+            elif isinstance(data, str):
+                full_response = data
             
-            for line in response.iter_lines():
-                if line:
-                    line = line.decode('utf-8')
-                    if line.startswith('data: '):
-                        data_str = line[6:]
-                        if data_str.strip() == '[DONE]':
-                            break
-                        try:
-                            data = json.loads(data_str)
-                            if 'choices' in data and len(data['choices']) > 0:
-                                delta = data['choices'][0].get('delta', {})
-                                content = delta.get('content', '')
-                                if content:
-                                    full_response += content
-                                    update_count += 1
-                                    
-                                    # 每20次更新或每200个字符才更新一次消息，避免频繁API调用
-                                    if update_count % 20 == 0 or len(full_response) - len(last_update) > 200:
-                                        filtered_response = self.filter_ai_response(full_response)
-                                        if filtered_response and len(filtered_response.strip()) > 10 and filtered_response != last_update:
-                                            edit_result = bot.edit_message(chat_id, message_id, filtered_response)
-                                            if edit_result:
-                                                last_update = filtered_response
-                        except json.JSONDecodeError:
-                            continue
-            
-            # 最终过滤和更新
-            final_response = self.filter_ai_response(full_response)
-            if final_response:
-                bot.edit_message(chat_id, message_id, final_response)
-                # 添加AI回复到历史
-                self.add_to_conversation(user_id, "assistant", final_response)
-                return final_response
+            # 过滤和更新消息
+            if full_response:
+                filtered_response = self.filter_ai_response(full_response)
+                if filtered_response and len(filtered_response.strip()) > 10:
+                    bot.edit_message(chat_id, message_id, filtered_response)
+                    # 添加AI回复到历史
+                    self.add_to_conversation(user_id, "assistant", filtered_response)
+                    return filtered_response
+                else:
+                    # 如果过滤后内容太少，显示原始内容
+                    bot.edit_message(chat_id, message_id, full_response)
+                    self.add_to_conversation(user_id, "assistant", full_response)
+                    return full_response
             else:
                 bot.edit_message(chat_id, message_id, "抱歉，我没有收到完整的回复，请稍后再试。")
                 return "抱歉，我没有收到完整的回复，请稍后再试。"
