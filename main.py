@@ -164,8 +164,7 @@ class OpenWebUIClient:
             "frequency_penalty": 0,
             "presence_penalty": 0,
             "stop": None,
-            "tools_choice": "auto",  # 自动选择和执行工具
-            "parallel_tool_calls": True  # 允许并行工具调用
+            "tool_choice": "auto"  # 自动执行工具调用
         }
         
         # 发送初始状态消息
@@ -180,7 +179,7 @@ class OpenWebUIClient:
             # 更新状态显示长时间处理
             bot.edit_message(chat_id, message_id, "🔍 正在搜索最新信息...")
             
-            response = requests.post(url, headers=headers, json=payload, timeout=300)
+            response = requests.post(url, headers=headers, json=payload, timeout=600)
             response.raise_for_status()
             
             # 处理完整响应（等待所有工具执行完毕）
