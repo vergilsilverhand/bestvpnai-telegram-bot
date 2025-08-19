@@ -157,15 +157,13 @@ class OpenWebUIClient:
         payload = {
             "model": model,
             "messages": messages,
-            "stream": True,  # 重新启用流式响应
+            "stream": False,  # 改回非流式，等待完整工具执行
             "max_tokens": 8000,
             "temperature": 0.7,
             "top_p": 0.9,
             "frequency_penalty": 0,
             "presence_penalty": 0,
-            "stop": None,
-            "tools_choice": "auto",
-            "parallel_tool_calls": True
+            "stop": None
         }
         
         # 发送初始状态消息
@@ -176,104 +174,34 @@ class OpenWebUIClient:
         message_id = status_msg['result']['message_id']
         
         try:
-            logger.info(f"Sending streaming request to OpenWebUI: {url}")
-            response = requests.post(url, headers=headers, json=payload, timeout=300, stream=True)
+            logger.info(f"Sending request to OpenWebUI: {url}")
+            # 更新状态显示长时间处理
+            bot.edit_message(chat_id, message_id, "🔍 正在搜索最新信息...")
+            
+            response = requests.post(url, headers=headers, json=payload, timeout=300)
             response.raise_for_status()
             
-            # 智能流式响应处理
+            # 处理完整响应（等待所有工具执行完毕）
+            data = response.json()
+            logger.info(f"Response data keys: {list(data.keys()) if isinstance(data, dict) else 'Not dict'}")
+            
             full_response = ""
-            display_response = ""
-            last_update = ""
-            update_count = 0
-            in_thinking = False
-            thinking_content = ""
-            current_status = "🤔 正在思考..."
+            if 'choices' in data and len(data['choices']) > 0:
+                full_response = data['choices'][0]['message']['content']
+            elif 'message' in data:
+                full_response = data['message']
+            elif isinstance(data, str):
+                full_response = data
             
-            for line in response.iter_lines():
-                if line:
-                    line = line.decode('utf-8')
-                    if line.startswith('data: '):
-                        data_str = line[6:]
-                        if data_str.strip() == '[DONE]':
-                            break
-                        try:
-                            data = json.loads(data_str)
-                            if 'choices' in data and len(data['choices']) > 0:
-                                delta = data['choices'][0].get('delta', {})
-                                
-                                # 处理reasoning（思考过程）
-                                reasoning = delta.get('reasoning', '')
-                                if reasoning:
-                                    thinking_content += reasoning
-                                    full_response += reasoning
-                                    
-                                    # 根据推理内容更新状态
-                                    if not in_thinking:
-                                        in_thinking = True
-                                        current_status = "💭 正在思考..."
-                                    
-                                    # 检测特定操作并更新状态
-                                    reasoning_lower = reasoning.lower()
-                                    if any(word in reasoning_lower for word in ['search', '搜索', 'query', '查询']):
-                                        current_status = "🔍 正在搜索信息..."
-                                    elif any(word in reasoning_lower for word in ['analyze', '分析', 'review', '评估']):
-                                        current_status = "📊 正在分析数据..."
-                                    elif any(word in reasoning_lower for word in ['organize', '整理', 'format', '格式化']):
-                                        current_status = "📝 正在整理回答..."
-                                    elif any(word in reasoning_lower for word in ['tool', '工具', 'function', '函数']):
-                                        current_status = "⚙️ 正在调用工具..."
-                                    
-                                    # 更新状态（但不要太频繁）
-                                    if current_status != last_update and update_count % 5 == 0:
-                                        bot.edit_message(chat_id, message_id, current_status)
-                                        last_update = current_status
-                                    
-                                    update_count += 1
-                                    continue
-                                
-                                # 处理content（正式回答）
-                                content = delta.get('content', '')
-                                if content:
-                                    # 从推理阶段切换到回答阶段
-                                    if in_thinking:
-                                        in_thinking = False
-                                        current_status = "✍️ 正在回答..."
-                                        bot.edit_message(chat_id, message_id, current_status)
-                                        last_update = current_status
-                                    
-                                    display_response += content
-                                    full_response += content
-                                    update_count += 1
-                                    
-                                    # 流式更新正式回答（无过滤，显示原始内容）
-                                    if update_count % 10 == 0 or len(display_response) - len(last_update) > 100:
-                                        if len(display_response.strip()) > 10:
-                                            # 显示原始content，不过滤
-                                            bot.edit_message(chat_id, message_id, display_response)
-                                            last_update = display_response
-                                            
-                        except json.JSONDecodeError:
-                            continue
-            
-            # 最终处理和更新（无过滤，显示原始内容）
-            if display_response:
-                # 显示原始content内容，不过滤
-                final_response = display_response.strip()
-                if final_response:
-                    bot.edit_message(chat_id, message_id, final_response)
-                    self.add_to_conversation(user_id, "assistant", final_response)
-                    return final_response
-            
-            # 如果没有content，显示原始reasoning内容
-            if thinking_content and not display_response:
-                if len(thinking_content.strip()) > 20:
-                    response_with_note = f"🤔 *AI推理过程（原始）:*\n\n{thinking_content}"
-                    bot.edit_message(chat_id, message_id, response_with_note)
-                    self.add_to_conversation(user_id, "assistant", thinking_content)
-                    return thinking_content
-            
-            bot.edit_message(chat_id, message_id, "抱歉，我没有收到完整的回复，请稍后再试。")
-            return "抱歉，我没有收到完整的回复，请稍后再试。"
+            # 显示完整的原始响应（包含所有工具执行结果）
+            if full_response and len(full_response.strip()) > 10:
+                bot.edit_message(chat_id, message_id, full_response)
+                self.add_to_conversation(user_id, "assistant", full_response)
+                logger.info(f"Final response length: {len(full_response)}")
+                return full_response
+            else:
+                bot.edit_message(chat_id, message_id, "抱歉，我没有收到完整的回复，请稍后再试。")
+                return "抱歉，我没有收到完整的回复，请稍后再试。"
                 
         except Exception as e:
             logger.error(f"Streaming error: {e}")
