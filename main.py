@@ -200,66 +200,78 @@ class OpenWebUIClient:
                             data = json.loads(data_str)
                             if 'choices' in data and len(data['choices']) > 0:
                                 delta = data['choices'][0].get('delta', {})
+                                
+                                # 处理reasoning（思考过程）
+                                reasoning = delta.get('reasoning', '')
+                                if reasoning:
+                                    thinking_content += reasoning
+                                    full_response += reasoning
+                                    
+                                    # 根据推理内容更新状态
+                                    if not in_thinking:
+                                        in_thinking = True
+                                        current_status = "💭 正在思考..."
+                                    
+                                    # 检测特定操作并更新状态
+                                    reasoning_lower = reasoning.lower()
+                                    if any(word in reasoning_lower for word in ['search', '搜索', 'query', '查询']):
+                                        current_status = "🔍 正在搜索信息..."
+                                    elif any(word in reasoning_lower for word in ['analyze', '分析', 'review', '评估']):
+                                        current_status = "📊 正在分析数据..."
+                                    elif any(word in reasoning_lower for word in ['organize', '整理', 'format', '格式化']):
+                                        current_status = "📝 正在整理回答..."
+                                    elif any(word in reasoning_lower for word in ['tool', '工具', 'function', '函数']):
+                                        current_status = "⚙️ 正在调用工具..."
+                                    
+                                    # 更新状态（但不要太频繁）
+                                    if current_status != last_update and update_count % 5 == 0:
+                                        bot.edit_message(chat_id, message_id, current_status)
+                                        last_update = current_status
+                                    
+                                    update_count += 1
+                                    continue
+                                
+                                # 处理content（正式回答）
                                 content = delta.get('content', '')
                                 if content:
-                                    full_response += content
-                                    
-                                    # 检测思考标签
-                                    if '<thinking>' in content or '思考用时' in content or '思考中' in content:
-                                        in_thinking = True
-                                        current_status = "💭 正在深度思考..."
-                                        bot.edit_message(chat_id, message_id, current_status)
-                                        continue
-                                    elif '</thinking>' in content or '思考完成' in content:
-                                        in_thinking = False
-                                        current_status = "✍️ 正在整理回答..."
-                                        bot.edit_message(chat_id, message_id, current_status)
-                                        continue
-                                    
-                                    # 如果在思考中，收集思考内容但不显示
+                                    # 从推理阶段切换到回答阶段
                                     if in_thinking:
-                                        thinking_content += content
-                                        # 更新思考状态
-                                        if '搜索' in content or 'search' in content.lower():
-                                            current_status = "🔍 正在搜索信息..."
-                                        elif '分析' in content or 'analy' in content.lower():
-                                            current_status = "📊 正在分析数据..."
-                                        elif '整理' in content or 'organiz' in content.lower():
-                                            current_status = "📝 正在整理答案..."
-                                        
-                                        if current_status != last_update:
-                                            bot.edit_message(chat_id, message_id, current_status)
-                                            last_update = current_status
-                                        continue
+                                        in_thinking = False
+                                        current_status = "✍️ 正在回答..."
+                                        bot.edit_message(chat_id, message_id, current_status)
+                                        last_update = current_status
                                     
-                                    # 正式回答内容，进行流式更新
                                     display_response += content
+                                    full_response += content
                                     update_count += 1
                                     
-                                    # 每10次更新或每100字符更新一次
+                                    # 流式更新正式回答
                                     if update_count % 10 == 0 or len(display_response) - len(last_update) > 100:
-                                        filtered = self.filter_ai_response(display_response)
-                                        if filtered and len(filtered.strip()) > 20 and filtered != last_update:
-                                            bot.edit_message(chat_id, message_id, filtered)
-                                            last_update = filtered
+                                        if len(display_response.strip()) > 10:
+                                            bot.edit_message(chat_id, message_id, display_response)
+                                            last_update = display_response
                                             
                         except json.JSONDecodeError:
                             continue
             
             # 最终处理和更新
-            final_response = self.filter_ai_response(display_response) if display_response else self.filter_ai_response(full_response)
+            if display_response:
+                # 如果有正式回答内容，使用它
+                final_response = display_response.strip()
+                if final_response:
+                    bot.edit_message(chat_id, message_id, final_response)
+                    self.add_to_conversation(user_id, "assistant", final_response)
+                    return final_response
             
-            if final_response and len(final_response.strip()) > 20:
-                bot.edit_message(chat_id, message_id, final_response)
-                self.add_to_conversation(user_id, "assistant", final_response)
-                return final_response
-            elif full_response:
-                # 如果过滤后内容太少，显示原始内容
-                clean_response = full_response.replace('<thinking>', '').replace('</thinking>', '').replace(thinking_content, '').strip()
-                if clean_response:
-                    bot.edit_message(chat_id, message_id, clean_response)
-                    self.add_to_conversation(user_id, "assistant", clean_response)
-                    return clean_response
+            # 如果没有content，可能所有内容都在reasoning中
+            # 这种情况下，显示推理内容但标注为思考过程
+            if thinking_content and not display_response:
+                clean_thinking = self.filter_ai_response(thinking_content)
+                if clean_thinking and len(clean_thinking.strip()) > 20:
+                    response_with_note = f"🤔 *AI推理过程:*\n\n{clean_thinking}"
+                    bot.edit_message(chat_id, message_id, response_with_note)
+                    self.add_to_conversation(user_id, "assistant", clean_thinking)
+                    return clean_thinking
             
             bot.edit_message(chat_id, message_id, "抱歉，我没有收到完整的回复，请稍后再试。")
             return "抱歉，我没有收到完整的回复，请稍后再试。"
