@@ -164,7 +164,8 @@ class OpenWebUIClient:
             "frequency_penalty": 0,
             "presence_penalty": 0,
             "stop": None,
-            "tool_choice": "auto"  # 自动执行工具调用
+            "tools_choice": "auto",  # 自动选择和执行工具
+            "parallel_tool_calls": True  # 允许并行工具调用
         }
         
         # 发送初始状态消息
