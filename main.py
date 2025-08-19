@@ -114,9 +114,12 @@ class OpenWebUIClient:
         user_conversations[user_id] = []
     
     def filter_ai_response(self, text):
-        """过滤AI响应，移除工具调用JSON和不必要的内容"""
+        """过滤AI响应，移除推理过程和不必要的内容"""
         if not text:
             return ""
+        
+        # 移除think标签及其内容
+        text = re.sub(r'<think>.*?</think>', '', text, flags=re.MULTILINE | re.DOTALL)
         
         # 移除工具调用JSON块 - 更精确的匹配
         text = re.sub(r'工具调用：\s*\{.*?\}', '', text, flags=re.MULTILINE | re.DOTALL)
@@ -193,12 +196,17 @@ class OpenWebUIClient:
             elif isinstance(data, str):
                 full_response = data
             
-            # 显示完整响应
+            # 过滤并显示完整响应
             if full_response and len(full_response.strip()) > 10:
-                bot.edit_message(chat_id, message_id, full_response)
-                self.add_to_conversation(user_id, "assistant", full_response)
-                logger.info(f"Final response length: {len(full_response)}")
-                return full_response
+                filtered_response = self.filter_ai_response(full_response)
+                if filtered_response:
+                    bot.edit_message(chat_id, message_id, filtered_response)
+                    self.add_to_conversation(user_id, "assistant", filtered_response)
+                    logger.info(f"Final response length: {len(filtered_response)}")
+                    return filtered_response
+                else:
+                    bot.edit_message(chat_id, message_id, "抱歉，我没有收到完整的回复，请稍后再试。")
+                    return "抱歉，我没有收到完整的回复，请稍后再试。"
             else:
                 bot.edit_message(chat_id, message_id, "抱歉，我没有收到完整的回复，请稍后再试。")
                 return "抱歉，我没有收到完整的回复，请稍后再试。"
@@ -261,9 +269,14 @@ class OpenWebUIClient:
                             continue
             
             if full_response.strip():
-                # 添加AI回复到历史
-                self.add_to_conversation(user_id, "assistant", full_response.strip())
-                return full_response.strip()
+                # 过滤响应并添加到历史
+                filtered_response = self.filter_ai_response(full_response.strip())
+                if filtered_response:
+                    self.add_to_conversation(user_id, "assistant", filtered_response)
+                    return filtered_response
+                else:
+                    logger.warning("Response filtered out completely")
+                    return "抱歉，我没有收到完整的回复，请稍后再试。"
             else:
                 logger.warning("No content received from streaming response")
                 return "抱歉，我没有收到完整的回复，请稍后再试。"
