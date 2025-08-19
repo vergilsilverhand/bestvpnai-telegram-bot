@@ -158,8 +158,14 @@ class OpenWebUIClient:
             "model": model,
             "messages": messages,
             "stream": False,  # 禁用流式，等待完整结果
-            "max_tokens": 4000,
-            "temperature": 0.7
+            "max_tokens": 8000,  # 增加token限制确保完整回复
+            "temperature": 0.7,
+            "top_p": 0.9,
+            "frequency_penalty": 0,
+            "presence_penalty": 0,
+            "stop": None,  # 不设置停止标记，让AI完整回复
+            "tools_choice": "auto",  # 自动选择和执行工具
+            "parallel_tool_calls": True  # 允许并行工具调用
         }
         
         # 发送初始状态消息
@@ -171,7 +177,7 @@ class OpenWebUIClient:
         
         try:
             logger.info(f"Sending request to OpenWebUI: {url}")
-            response = requests.post(url, headers=headers, json=payload, timeout=180)
+            response = requests.post(url, headers=headers, json=payload, timeout=300)
             response.raise_for_status()
             
             # 处理完整响应（包含工具调用结果）
