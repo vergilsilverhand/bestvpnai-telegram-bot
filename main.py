@@ -94,6 +94,14 @@ class OpenWebUIClient:
         # 获取完整对话历史
         messages = self.get_conversation_history(user_id)
         
+        # 如果这是新对话，添加系统提示
+        if len(messages) == 1:  # 只有用户的第一条消息
+            system_prompt = {
+                "role": "system", 
+                "content": "你是BestVPN AI的智能助手。请直接回答用户的问题，不要尝试使用任何工具或进行搜索。基于你的已有知识提供有用的回答。保持回答简洁、友好和有帮助。如果需要最新信息，请告知用户你的知识有时间限制，建议他们查询最新资源。"
+            }
+            messages.insert(0, system_prompt)
+        
         payload = {
             "model": model,
             "messages": messages,
