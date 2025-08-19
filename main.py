@@ -157,15 +157,15 @@ class OpenWebUIClient:
         payload = {
             "model": model,
             "messages": messages,
-            "stream": False,  # 禁用流式，等待完整结果
-            "max_tokens": 8000,  # 增加token限制确保完整回复
+            "stream": True,  # 重新启用流式响应
+            "max_tokens": 8000,
             "temperature": 0.7,
             "top_p": 0.9,
             "frequency_penalty": 0,
             "presence_penalty": 0,
-            "stop": None,  # 不设置停止标记，让AI完整回复
-            "tools_choice": "auto",  # 自动选择和执行工具
-            "parallel_tool_calls": True  # 允许并行工具调用
+            "stop": None,
+            "tools_choice": "auto",
+            "parallel_tool_calls": True
         }
         
         # 发送初始状态消息
@@ -176,38 +176,93 @@ class OpenWebUIClient:
         message_id = status_msg['result']['message_id']
         
         try:
-            logger.info(f"Sending request to OpenWebUI: {url}")
-            response = requests.post(url, headers=headers, json=payload, timeout=300)
+            logger.info(f"Sending streaming request to OpenWebUI: {url}")
+            response = requests.post(url, headers=headers, json=payload, timeout=300, stream=True)
             response.raise_for_status()
             
-            # 处理完整响应（包含工具调用结果）
-            data = response.json()
-            logger.info(f"Response data keys: {list(data.keys()) if isinstance(data, dict) else 'Not dict'}")
-            
+            # 智能流式响应处理
             full_response = ""
-            if 'choices' in data and len(data['choices']) > 0:
-                full_response = data['choices'][0]['message']['content']
-            elif 'message' in data:
-                full_response = data['message']
-            elif isinstance(data, str):
-                full_response = data
+            display_response = ""
+            last_update = ""
+            update_count = 0
+            in_thinking = False
+            thinking_content = ""
+            current_status = "🤔 正在思考..."
             
-            # 过滤和更新消息
-            if full_response:
-                filtered_response = self.filter_ai_response(full_response)
-                if filtered_response and len(filtered_response.strip()) > 10:
-                    bot.edit_message(chat_id, message_id, filtered_response)
-                    # 添加AI回复到历史
-                    self.add_to_conversation(user_id, "assistant", filtered_response)
-                    return filtered_response
-                else:
-                    # 如果过滤后内容太少，显示原始内容
-                    bot.edit_message(chat_id, message_id, full_response)
-                    self.add_to_conversation(user_id, "assistant", full_response)
-                    return full_response
-            else:
-                bot.edit_message(chat_id, message_id, "抱歉，我没有收到完整的回复，请稍后再试。")
-                return "抱歉，我没有收到完整的回复，请稍后再试。"
+            for line in response.iter_lines():
+                if line:
+                    line = line.decode('utf-8')
+                    if line.startswith('data: '):
+                        data_str = line[6:]
+                        if data_str.strip() == '[DONE]':
+                            break
+                        try:
+                            data = json.loads(data_str)
+                            if 'choices' in data and len(data['choices']) > 0:
+                                delta = data['choices'][0].get('delta', {})
+                                content = delta.get('content', '')
+                                if content:
+                                    full_response += content
+                                    
+                                    # 检测思考标签
+                                    if '<thinking>' in content or '思考用时' in content or '思考中' in content:
+                                        in_thinking = True
+                                        current_status = "💭 正在深度思考..."
+                                        bot.edit_message(chat_id, message_id, current_status)
+                                        continue
+                                    elif '</thinking>' in content or '思考完成' in content:
+                                        in_thinking = False
+                                        current_status = "✍️ 正在整理回答..."
+                                        bot.edit_message(chat_id, message_id, current_status)
+                                        continue
+                                    
+                                    # 如果在思考中，收集思考内容但不显示
+                                    if in_thinking:
+                                        thinking_content += content
+                                        # 更新思考状态
+                                        if '搜索' in content or 'search' in content.lower():
+                                            current_status = "🔍 正在搜索信息..."
+                                        elif '分析' in content or 'analy' in content.lower():
+                                            current_status = "📊 正在分析数据..."
+                                        elif '整理' in content or 'organiz' in content.lower():
+                                            current_status = "📝 正在整理答案..."
+                                        
+                                        if current_status != last_update:
+                                            bot.edit_message(chat_id, message_id, current_status)
+                                            last_update = current_status
+                                        continue
+                                    
+                                    # 正式回答内容，进行流式更新
+                                    display_response += content
+                                    update_count += 1
+                                    
+                                    # 每10次更新或每100字符更新一次
+                                    if update_count % 10 == 0 or len(display_response) - len(last_update) > 100:
+                                        filtered = self.filter_ai_response(display_response)
+                                        if filtered and len(filtered.strip()) > 20 and filtered != last_update:
+                                            bot.edit_message(chat_id, message_id, filtered)
+                                            last_update = filtered
+                                            
+                        except json.JSONDecodeError:
+                            continue
+            
+            # 最终处理和更新
+            final_response = self.filter_ai_response(display_response) if display_response else self.filter_ai_response(full_response)
+            
+            if final_response and len(final_response.strip()) > 20:
+                bot.edit_message(chat_id, message_id, final_response)
+                self.add_to_conversation(user_id, "assistant", final_response)
+                return final_response
+            elif full_response:
+                # 如果过滤后内容太少，显示原始内容
+                clean_response = full_response.replace('<thinking>', '').replace('</thinking>', '').replace(thinking_content, '').strip()
+                if clean_response:
+                    bot.edit_message(chat_id, message_id, clean_response)
+                    self.add_to_conversation(user_id, "assistant", clean_response)
+                    return clean_response
+            
+            bot.edit_message(chat_id, message_id, "抱歉，我没有收到完整的回复，请稍后再试。")
+            return "抱歉，我没有收到完整的回复，请稍后再试。"
                 
         except Exception as e:
             logger.error(f"Streaming error: {e}")
