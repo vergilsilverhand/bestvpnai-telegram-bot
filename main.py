@@ -39,7 +39,28 @@ class OpenWebUIClient:
         self.base_url = OPENWEBUI_BASE_URL
         self.api_key = OPENWEBUI_API_KEY
         
-    def chat_completion(self, message, model="llama3.1"):
+    def get_available_models(self):
+        """Get available models from OpenWebUI"""
+        url = f"{self.base_url}/api/models"
+        headers = {
+            'Authorization': f'Bearer {self.api_key}',
+            'Content-Type': 'application/json'
+        }
+        
+        try:
+            response = requests.get(url, headers=headers, timeout=10)
+            response.raise_for_status()
+            data = response.json()
+            if 'data' in data:
+                models = [model['id'] for model in data['data']]
+                logger.info(f"Available models: {models}")
+                return models
+            return []
+        except Exception as e:
+            logger.error(f"Failed to get models: {e}")
+            return []
+    
+    def chat_completion(self, message, model="AI.x-ai/grok-3-mini"):
         """Send chat completion request to OpenWebUI"""
         url = f"{self.base_url}/api/chat/completions"
         headers = {
