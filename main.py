@@ -140,7 +140,7 @@ class OpenWebUIClient:
             
         return cleaned
     
-    def stream_chat_completion(self, bot, chat_id, user_id, message, model="AI.x-ai/grok-3-mini"):
+    def stream_chat_completion(self, bot, chat_id, user_id, message, model="orm_anan.unirouter/qwen/qwen3-235b-a22b"):
         """流式处理AI响应并实时更新Telegram消息"""
         url = f"{self.base_url}/api/chat/completions"
         headers = {
@@ -157,15 +157,13 @@ class OpenWebUIClient:
         payload = {
             "model": model,
             "messages": messages,
-            "stream": False,  # 等待完整工具执行
+            "stream": False,
             "max_tokens": 8000,
             "temperature": 0.7,
             "top_p": 0.9,
             "frequency_penalty": 0,
             "presence_penalty": 0,
-            "stop": None,
-            "tools_choice": "auto",  # 自动选择和执行工具
-            "parallel_tool_calls": True  # 允许并行工具调用
+            "stop": None
         }
         
         # 发送初始状态消息
@@ -177,8 +175,8 @@ class OpenWebUIClient:
         
         try:
             logger.info(f"Sending request to OpenWebUI: {url}")
-            # 更新状态显示长时间处理
-            bot.edit_message(chat_id, message_id, "🔍 正在搜索最新信息...")
+            # 更新状态
+            bot.edit_message(chat_id, message_id, "💭 正在生成回复...")
             
             response = requests.post(url, headers=headers, json=payload, timeout=600)
             response.raise_for_status()
@@ -195,7 +193,7 @@ class OpenWebUIClient:
             elif isinstance(data, str):
                 full_response = data
             
-            # 显示完整的原始响应（包含所有工具执行结果）
+            # 显示完整响应
             if full_response and len(full_response.strip()) > 10:
                 bot.edit_message(chat_id, message_id, full_response)
                 self.add_to_conversation(user_id, "assistant", full_response)
@@ -210,7 +208,7 @@ class OpenWebUIClient:
             bot.edit_message(chat_id, message_id, "抱歉，处理您的请求时出现了问题，请稍后再试。")
             return "抱歉，处理您的请求时出现了问题，请稍后再试。"
     
-    def chat_completion(self, user_id, message, model="orm_xiaoming.xiaoming/qwen3-32b-instruct-tool"):
+    def chat_completion(self, user_id, message, model="orm_anan.unirouter/qwen/qwen3-235b-a22b"):
         """Send chat completion request to OpenWebUI with conversation context"""
         url = f"{self.base_url}/api/chat/completions"
         headers = {
