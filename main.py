@@ -157,13 +157,15 @@ class OpenWebUIClient:
         payload = {
             "model": model,
             "messages": messages,
-            "stream": False,  # 改回非流式，等待完整工具执行
+            "stream": False,  # 等待完整工具执行
             "max_tokens": 8000,
             "temperature": 0.7,
             "top_p": 0.9,
             "frequency_penalty": 0,
             "presence_penalty": 0,
-            "stop": None
+            "stop": None,
+            "tools_choice": "auto",  # 自动选择和执行工具
+            "parallel_tool_calls": True  # 允许并行工具调用
         }
         
         # 发送初始状态消息
