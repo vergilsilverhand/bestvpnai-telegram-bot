@@ -1,7 +1,9 @@
 import os
 import logging
 import requests
+import json
 from flask import Flask, request, jsonify
+from collections import defaultdict
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -11,6 +13,9 @@ app = Flask(__name__)
 TELEGRAM_BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
 OPENWEBUI_BASE_URL = os.environ.get('OPENWEBUI_BASE_URL', 'https://bestvpnai.org')
 OPENWEBUI_API_KEY = os.environ.get('OPENWEBUI_API_KEY')
+
+# 存储用户会话上下文
+user_conversations = defaultdict(list)
 
 class TelegramBot:
     def __init__(self):
@@ -60,27 +65,47 @@ class OpenWebUIClient:
             logger.error(f"Failed to get models: {e}")
             return []
     
-    def chat_completion(self, message, model="AI.x-ai/grok-3-mini"):
-        """Send chat completion request to OpenWebUI"""
+    def add_to_conversation(self, user_id, role, content):
+        """Add message to user's conversation history"""
+        user_conversations[user_id].append({"role": role, "content": content})
+        # 保持最近20条消息的历史
+        if len(user_conversations[user_id]) > 20:
+            user_conversations[user_id] = user_conversations[user_id][-20:]
+    
+    def get_conversation_history(self, user_id):
+        """Get user's conversation history"""
+        return user_conversations[user_id]
+    
+    def clear_conversation(self, user_id):
+        """Clear user's conversation history"""
+        user_conversations[user_id] = []
+    
+    def chat_completion(self, user_id, message, model="AI.x-ai/grok-3-mini"):
+        """Send chat completion request to OpenWebUI with conversation context"""
         url = f"{self.base_url}/api/chat/completions"
         headers = {
             'Authorization': f'Bearer {self.api_key}',
             'Content-Type': 'application/json'
         }
         
+        # 添加用户消息到历史
+        self.add_to_conversation(user_id, "user", message)
+        
+        # 获取完整对话历史
+        messages = self.get_conversation_history(user_id)
+        
         payload = {
             "model": model,
-            "messages": [
-                {"role": "user", "content": message}
-            ],
+            "messages": messages,
             "stream": False,
-            "max_tokens": 2000,
+            "max_tokens": 3000,
             "temperature": 0.7
         }
         
         try:
             logger.info(f"Sending request to OpenWebUI: {url}")
-            response = requests.post(url, headers=headers, json=payload, timeout=30)
+            logger.info(f"Messages count: {len(messages)}")
+            response = requests.post(url, headers=headers, json=payload, timeout=60)
             logger.info(f"Response status: {response.status_code}")
             
             if response.status_code == 400:
@@ -90,12 +115,18 @@ class OpenWebUIClient:
             data = response.json()
             logger.info(f"Response data keys: {list(data.keys()) if isinstance(data, dict) else 'Not dict'}")
             
+            ai_response = None
             if 'choices' in data and len(data['choices']) > 0:
-                return data['choices'][0]['message']['content']
+                ai_response = data['choices'][0]['message']['content']
             elif 'message' in data:
-                return data['message']
+                ai_response = data['message']
             elif isinstance(data, str):
-                return data
+                ai_response = data
+            
+            if ai_response:
+                # 添加AI回复到历史
+                self.add_to_conversation(user_id, "assistant", ai_response)
+                return ai_response
             else:
                 logger.warning(f"Unexpected response format: {data}")
                 return "抱歉，我遇到了一些问题，请稍后再试。"
@@ -129,12 +160,14 @@ def webhook():
         
         user_message = message['text']
         user_name = message.get('from', {}).get('first_name', 'User')
+        user_id = str(message.get('from', {}).get('id', chat_id))
         
-        logger.info(f"Received message from {user_name}: {user_message}")
+        logger.info(f"Received message from {user_name} (ID: {user_id}): {user_message}")
         
         # Handle /start command
         if user_message.startswith('/start'):
-            welcome_message = f"你好 {user_name}! 👋\n\n我是由 BestVPN AI 提供支持的智能助手。\n\n请随时向我提问，我会尽力帮助您！"
+            openwebui_client.clear_conversation(user_id)
+            welcome_message = f"你好 {user_name}! 👋\n\n我是由 BestVPN AI 提供支持的智能助手。\n\n请随时向我提问，我会记住我们的对话内容！"
             bot.send_message(chat_id, welcome_message)
             return jsonify({'ok': True})
         
@@ -142,14 +175,21 @@ def webhook():
         if user_message.startswith('/help'):
             help_message = "🤖 **使用说明**\n\n" + \
                           "• 直接发送消息与我对话\n" + \
-                          "• /start - 开始对话\n" + \
+                          "• /start - 开始新的对话（清除历史）\n" + \
+                          "• /clear - 清除对话历史\n" + \
                           "• /help - 查看帮助信息\n\n" + \
-                          "我会使用 BestVPN AI 的模型为您提供智能回答。"
+                          "我会记住我们的对话内容，支持上下文对话！"
             bot.send_message(chat_id, help_message)
             return jsonify({'ok': True})
         
-        # Get response from OpenWebUI
-        ai_response = openwebui_client.chat_completion(user_message)
+        # Handle /clear command
+        if user_message.startswith('/clear'):
+            openwebui_client.clear_conversation(user_id)
+            bot.send_message(chat_id, "✅ 对话历史已清除，我们可以开始新的对话了！")
+            return jsonify({'ok': True})
+        
+        # Get response from OpenWebUI with conversation context
+        ai_response = openwebui_client.chat_completion(user_id, user_message)
         
         # Send response back to user
         bot.send_message(chat_id, ai_response)
