@@ -3,6 +3,7 @@ import logging
 import requests
 import json
 import re
+import time
 from flask import Flask, request, jsonify
 from collections import defaultdict
 
@@ -160,7 +161,7 @@ class OpenWebUIClient:
         payload = {
             "model": model,
             "messages": messages,
-            "stream": False,
+            "stream": True,
             "max_tokens": 8000,
             "temperature": 0.7,
             "top_p": 0.9,
@@ -178,35 +179,45 @@ class OpenWebUIClient:
         
         try:
             logger.info(f"Sending request to OpenWebUI: {url}")
-            # 更新状态
-            bot.edit_message(chat_id, message_id, "💭 正在生成回复...")
             
-            response = requests.post(url, headers=headers, json=payload, timeout=600)
+            response = requests.post(url, headers=headers, json=payload, timeout=600, stream=True)
             response.raise_for_status()
             
-            # 处理完整响应（等待所有工具执行完毕）
-            data = response.json()
-            logger.info(f"Response data keys: {list(data.keys()) if isinstance(data, dict) else 'Not dict'}")
-            
+            # 流式处理响应
             full_response = ""
-            if 'choices' in data and len(data['choices']) > 0:
-                full_response = data['choices'][0]['message']['content']
-            elif 'message' in data:
-                full_response = data['message']
-            elif isinstance(data, str):
-                full_response = data
+            current_text = ""
+            last_update_time = 0
             
-            # 过滤并显示完整响应
-            if full_response and len(full_response.strip()) > 10:
-                filtered_response = self.filter_ai_response(full_response)
-                if filtered_response:
-                    bot.edit_message(chat_id, message_id, filtered_response)
-                    self.add_to_conversation(user_id, "assistant", filtered_response)
-                    logger.info(f"Final response length: {len(filtered_response)}")
-                    return filtered_response
-                else:
-                    bot.edit_message(chat_id, message_id, "抱歉，我没有收到完整的回复，请稍后再试。")
-                    return "抱歉，我没有收到完整的回复，请稍后再试。"
+            for line in response.iter_lines():
+                if line:
+                    line = line.decode('utf-8')
+                    if line.startswith('data: '):
+                        data_str = line[6:]  # 移除 'data: ' 前缀
+                        if data_str.strip() == '[DONE]':
+                            break
+                        try:
+                            data = json.loads(data_str)
+                            if 'choices' in data and len(data['choices']) > 0:
+                                delta = data['choices'][0].get('delta', {})
+                                content = delta.get('content', '')
+                                if content:
+                                    full_response += content
+                                    current_text = self.filter_ai_response(full_response)
+                                    
+                                    # 每0.5秒更新消息
+                                    current_time = time.time()
+                                    if current_time - last_update_time > 0.5 and current_text.strip():
+                                        bot.edit_message(chat_id, message_id, current_text + " ▋")
+                                        last_update_time = current_time
+                        except json.JSONDecodeError:
+                            continue
+            
+            # 最终更新 - 移除光标
+            if current_text.strip():
+                bot.edit_message(chat_id, message_id, current_text)
+                self.add_to_conversation(user_id, "assistant", current_text)
+                logger.info(f"Final response length: {len(current_text)}")
+                return current_text
             else:
                 bot.edit_message(chat_id, message_id, "抱歉，我没有收到完整的回复，请稍后再试。")
                 return "抱歉，我没有收到完整的回复，请稍后再试。"
