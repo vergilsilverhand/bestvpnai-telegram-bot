@@ -66,56 +66,29 @@ class TelegramBot:
         if not text:
             return text
 
-        # 先处理特殊的HTML标签，转换为Telegram支持的格式
+        import re
+
+        # 只处理最基本的问题格式，保留其他格式
+
+        # 1. 处理引用链接格式：数字 (完整链接) -> 数字
+        text = re.sub(r'(\d+)\s*\(https?://[^\)]+\)', r'\1', text)
+
+        # 2. 移除孤立的链接：(完整链接) -> 移除
+        text = re.sub(r'\s*\(https?://[^\)]+\)', '', text)
+
+        # 3. 简化[[数字]]格式为[数字]
+        text = re.sub(r'\[\[(\d+)\]\]', r'[\1]', text)
+
+        # 4. 处理HTML标签
         text = text.replace('<details>', '\n🔍 *详细信息:*\n')
         text = text.replace('</details>', '\n')
         text = text.replace('<summary>', '*')
         text = text.replace('</summary>', '*\n')
 
-        # 处理链接格式 - 保留有用的链接但简化格式
-        import re
-
-        # 将 [[数字]] 格式的引用转换为更简单的格式
-        text = re.sub(r'\[\[(\d+)\]\]', r'[\1]', text)
-
-        # 处理Markdown链接格式，智能保留有用链接
-        def replace_link(match):
-            link_text = match.group(1)
-            link_url = match.group(2)
-
-            # 如果链接文本本身就是URL或者很长的描述，只保留文本
-            if (link_url.lower() in link_text.lower() or
-                len(link_text) > 80 or
-                'youtube.com' in link_url or
-                'wikipedia.org' in link_url):
-                return link_text
-
-            # 如果是短标题且有有用的链接，保留简化格式
-            if len(link_text) < 30 and not link_text.startswith('http'):
-                return f"[{link_text}]({link_url})"
-
-            # 其他情况只保留文本
-            return link_text
-
-        text = re.sub(r'\[([^\]]+)\]\(([^\)]+)\)', replace_link, text)
-
-        # 处理各种引用链接格式
-        # 格式1: 数字 (链接) -> 数字
-        text = re.sub(r'(\d+)\s*\(https?://[^\)]+\)', r'\1', text)
-
-        # 格式2: 纯链接引用 (链接) -> 移除
-        text = re.sub(r'\s*\(https?://[^\)]+\)', '', text)
-
-        # 清理连续多个空格
+        # 5. 清理多余空格
         text = re.sub(r'\s{2,}', ' ', text)
 
-        # 保护已有的加粗格式，但确保格式正确
-        text = re.sub(r'\*\*([^*]+)\*\*', r'*\1*', text)
-
-        # 清理可能导致Markdown问题的字符，但保留基本格式
-        # text = text.replace('_', '\\_').replace('[', '\\[').replace('`', '\\`')
-
-        # 限制消息长度
+        # 6. 限制消息长度
         if len(text) > 4096:
             text = text[:4090] + "..."
 
