@@ -30,44 +30,98 @@ class TelegramBot:
     def send_message(self, chat_id, text):
         """Send message to Telegram chat"""
         url = f"{self.api_url}/sendMessage"
+
+        # 清理文本格式
+        cleaned_text = self.clean_text_for_telegram(text)
+
         payload = {
             'chat_id': chat_id,
-            'text': text,
+            'text': cleaned_text,
             'parse_mode': 'Markdown'
         }
-        
+
         try:
             response = requests.post(url, json=payload, timeout=10)
+            if response.status_code != 200:
+                logger.warning(f"Markdown parsing failed in send_message, trying HTML. Error: {response.text}")
+                # 如果Markdown失败，尝试HTML格式
+                payload['parse_mode'] = 'HTML'
+                response = requests.post(url, json=payload, timeout=10)
+
+                if response.status_code != 200:
+                    logger.warning("HTML parsing also failed in send_message, using plain text")
+                    # 如果HTML也失败，使用纯文本
+                    payload['parse_mode'] = None
+                    payload['text'] = text  # 使用原始文本
+                    response = requests.post(url, json=payload, timeout=10)
+
             response.raise_for_status()
             return response.json()
         except requests.exceptions.RequestException as e:
             logger.error(f"Failed to send message: {e}")
             return None
     
-    def edit_message(self, chat_id, message_id, text):
-        """Edit existing message in Telegram chat"""
-        url = f"{self.api_url}/editMessageText"
-        
-        # 清理文本，避免Markdown格式问题
-        text = text.replace('_', '\\_').replace('*', '\\*').replace('[', '\\[').replace('`', '\\`')
-        
+    def clean_text_for_telegram(self, text):
+        """清理文本以适应Telegram的Markdown格式"""
+        if not text:
+            return text
+
+        # 先处理特殊的HTML标签，转换为Telegram支持的格式
+        text = text.replace('<details>', '\n🔍 *详细信息:*\n')
+        text = text.replace('</details>', '\n')
+        text = text.replace('<summary>', '*')
+        text = text.replace('</summary>', '*\n')
+
+        # 处理链接格式 - Telegram不支持 [[1]] 这种格式
+        import re
+
+        # 将 [[数字]] 格式的引用转换为更简单的格式
+        text = re.sub(r'\[\[(\d+)\]\]', r'[\1]', text)
+
+        # 处理复杂的链接格式，简化为普通文本
+        text = re.sub(r'\[([^\]]+)\]\(([^\)]+)\)', r'\1', text)
+
+        # 保护已有的加粗格式，但确保格式正确
+        text = re.sub(r'\*\*([^*]+)\*\*', r'*\1*', text)
+
+        # 清理可能导致Markdown问题的字符，但保留基本格式
+        # text = text.replace('_', '\\_').replace('[', '\\[').replace('`', '\\`')
+
         # 限制消息长度
         if len(text) > 4096:
             text = text[:4090] + "..."
-        
+
+        return text
+
+    def edit_message(self, chat_id, message_id, text):
+        """Edit existing message in Telegram chat"""
+        url = f"{self.api_url}/editMessageText"
+
+        # 清理文本格式
+        cleaned_text = self.clean_text_for_telegram(text)
+
         payload = {
             'chat_id': chat_id,
             'message_id': message_id,
-            'text': text,
+            'text': cleaned_text,
             'parse_mode': 'Markdown'
         }
-        
+
         try:
             response = requests.post(url, json=payload, timeout=10)
             if response.status_code != 200:
-                # 如果Markdown失败，尝试纯文本
-                payload['parse_mode'] = None
+                logger.warning(f"Markdown parsing failed, trying HTML parse mode. Error: {response.text}")
+                # 如果Markdown失败，尝试HTML格式
+                payload['parse_mode'] = 'HTML'
                 response = requests.post(url, json=payload, timeout=10)
+
+                if response.status_code != 200:
+                    logger.warning("HTML parsing also failed, using plain text")
+                    # 如果HTML也失败，使用纯文本
+                    payload['parse_mode'] = None
+                    payload['text'] = text  # 使用原始文本
+                    response = requests.post(url, json=payload, timeout=10)
+
             response.raise_for_status()
             return response.json()
         except requests.exceptions.RequestException as e:
