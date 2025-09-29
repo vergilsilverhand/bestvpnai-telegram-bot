@@ -186,16 +186,13 @@ class OpenWebUIClient:
         # 获取完整对话历史
         messages = self.get_conversation_history(user_id)
 
+        # OpenWebUI标准payload格式
         payload = {
             "model": model,
             "messages": messages,
-            "stream": False,  # 非流式
-            "max_tokens": 8000,
-            "temperature": 0.7,
-            "top_p": 0.9,
-            "frequency_penalty": 0,
-            "presence_penalty": 0,
-            "stop": None
+            "stream": False,
+            "max_tokens": 4000,
+            "temperature": 0.7
         }
 
         # 发送等待状态消息
@@ -210,8 +207,17 @@ class OpenWebUIClient:
 
         try:
             logger.info(f"Sending request to OpenWebUI: {url}")
+            logger.info(f"Using model: {model}")
+            logger.info(f"Request payload keys: {list(payload.keys())}")
 
             response = requests.post(url, headers=headers, json=payload, timeout=600)
+            logger.info(f"Response status: {response.status_code}")
+
+            # 如果状态码不是200，记录详细错误信息
+            if response.status_code != 200:
+                logger.error(f"API returned non-200 status: {response.status_code}")
+                logger.error(f"Response headers: {dict(response.headers)}")
+                logger.error(f"Response content: {response.text[:1000]}...")  # 限制长度避免日志过长
 
             # 检查是否被取消
             if self.is_processing_cancelled(user_id):
