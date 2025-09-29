@@ -359,7 +359,8 @@ class OpenWebUIClient:
             logger.info(f"Using model: {model}")
             logger.info(f"Request payload keys: {list(payload.keys())}")
 
-            response = requests.post(url, headers=headers, json=payload, timeout=600, stream=True)
+            # 使用较短的超时，以便更快响应取消
+            response = requests.post(url, headers=headers, json=payload, timeout=30, stream=True)
             logger.info(f"Response status: {response.status_code}")
 
             # 如果状态码不是200，记录详细错误信息
@@ -371,28 +372,54 @@ class OpenWebUIClient:
 
             # 处理流式响应，但一次性显示结果
             full_response = ""
-            for line in response.iter_lines():
-                # 检查是否被取消
+            response_start_time = time.time()
+
+            # 使用iter_lines with timeout for better cancellation responsiveness
+            try:
+                for line in response.iter_lines(decode_unicode=True, chunk_size=1):
+                    # 更频繁的取消检查
+                    if self.is_processing_cancelled(user_id):
+                        # 关闭连接
+                        response.close()
+                        bot.edit_message(chat_id, message_id, "❌ 处理已被取消")
+                        self.clear_processing_status(user_id)
+                        logger.info(f"Processing cancelled for user {user_id} during streaming")
+                        return "处理已被取消"
+
+                    # 超时保护（最多5分钟）
+                    if time.time() - response_start_time > 300:
+                        response.close()
+                        bot.edit_message(chat_id, message_id, "⏰ 处理超时，请稍后重试")
+                        self.clear_processing_status(user_id)
+                        logger.warning(f"Processing timeout for user {user_id}")
+                        return "处理超时"
+
+                    if line:
+                        if line.startswith('data: '):
+                            data_str = line[6:]  # 移除 'data: ' 前缀
+                            if data_str.strip() == '[DONE]':
+                                break
+                            try:
+                                data = json.loads(data_str)
+                                if 'choices' in data and len(data['choices']) > 0:
+                                    delta = data['choices'][0].get('delta', {})
+                                    content = delta.get('content', '')
+                                    if content:
+                                        full_response += content
+                            except json.JSONDecodeError:
+                                continue
+            except requests.exceptions.Timeout:
+                logger.warning(f"Request timeout for user {user_id}")
+                bot.edit_message(chat_id, message_id, "⏰ 网络超时，请稍后重试")
+                self.clear_processing_status(user_id)
+                return "网络超时"
+            except Exception as stream_error:
+                logger.error(f"Streaming error for user {user_id}: {stream_error}")
                 if self.is_processing_cancelled(user_id):
                     bot.edit_message(chat_id, message_id, "❌ 处理已被取消")
                     self.clear_processing_status(user_id)
                     return "处理已被取消"
-
-                if line:
-                    line = line.decode('utf-8')
-                    if line.startswith('data: '):
-                        data_str = line[6:]  # 移除 'data: ' 前缀
-                        if data_str.strip() == '[DONE]':
-                            break
-                        try:
-                            data = json.loads(data_str)
-                            if 'choices' in data and len(data['choices']) > 0:
-                                delta = data['choices'][0].get('delta', {})
-                                content = delta.get('content', '')
-                                if content:
-                                    full_response += content
-                        except json.JSONDecodeError:
-                            continue
+                raise stream_error
 
             logger.info(f"Streaming completed. Full response length: {len(full_response)}")
 
@@ -490,7 +517,12 @@ def webhook():
         # Handle /cancel command
         if user_message.startswith('/cancel'):
             if openwebui_client.cancel_processing(user_id):
+                # 立即更新处理中的消息
+                if user_id in user_processing_status:
+                    status = user_processing_status[user_id]
+                    bot.edit_message(status['chat_id'], status['message_id'], "❌ 用户已取消处理")
                 bot.send_message(chat_id, "✅ 已取消当前的消息处理")
+                logger.info(f"User {user_id} cancelled processing")
             else:
                 bot.send_message(chat_id, "ℹ️ 当前没有正在处理的消息")
             return jsonify({'ok': True})
