@@ -19,6 +19,10 @@ OPENWEBUI_API_KEY = os.environ.get('OPENWEBUI_API_KEY')
 # 存储用户会话上下文
 user_conversations = defaultdict(list)
 
+# 速率限制存储
+user_rate_limits = defaultdict(list)  # {user_id: [timestamp1, timestamp2, ...]}
+session_rate_limits = defaultdict(list)  # {session_key: [timestamp1, timestamp2, ...]}
+
 
 class TelegramBot:
     def __init__(self):
@@ -255,6 +259,87 @@ class OpenWebUIClient:
     def clear_conversation(self, user_id):
         """Clear user's conversation history"""
         user_conversations[user_id] = []
+
+    def check_user_rate_limit(self, user_id, max_requests=10, time_window=60):
+        """
+        检查用户速率限制
+        Args:
+            user_id: 用户ID
+            max_requests: 时间窗口内最大请求数 (默认: 10次)
+            time_window: 时间窗口秒数 (默认: 60秒)
+        Returns:
+            (bool, int): (是否允许, 剩余等待时间)
+        """
+        import time
+        current_time = time.time()
+
+        # 清理过期的时间戳
+        user_rate_limits[user_id] = [
+            timestamp for timestamp in user_rate_limits[user_id]
+            if current_time - timestamp < time_window
+        ]
+
+        # 检查是否超过限制
+        if len(user_rate_limits[user_id]) >= max_requests:
+            oldest_request = min(user_rate_limits[user_id])
+            wait_time = int(time_window - (current_time - oldest_request))
+            return False, wait_time
+
+        # 记录当前请求
+        user_rate_limits[user_id].append(current_time)
+        return True, 0
+
+    def check_session_rate_limit(self, chat_id, user_id, max_requests=3, time_window=10):
+        """
+        检查会话速率限制（防止快速连续消息）
+        Args:
+            chat_id: 聊天ID
+            user_id: 用户ID
+            max_requests: 时间窗口内最大请求数 (默认: 3次)
+            time_window: 时间窗口秒数 (默认: 10秒)
+        Returns:
+            (bool, int): (是否允许, 剩余等待时间)
+        """
+        import time
+        current_time = time.time()
+        session_key = f"{chat_id}_{user_id}"
+
+        # 清理过期的时间戳
+        session_rate_limits[session_key] = [
+            timestamp for timestamp in session_rate_limits[session_key]
+            if current_time - timestamp < time_window
+        ]
+
+        # 检查是否超过限制
+        if len(session_rate_limits[session_key]) >= max_requests:
+            oldest_request = min(session_rate_limits[session_key])
+            wait_time = int(time_window - (current_time - oldest_request))
+            return False, wait_time
+
+        # 记录当前请求
+        session_rate_limits[session_key].append(current_time)
+        return True, 0
+
+    def get_rate_limit_status(self, user_id):
+        """获取用户当前的速率限制状态"""
+        import time
+        current_time = time.time()
+
+        # 清理过期记录
+        user_rate_limits[user_id] = [
+            timestamp for timestamp in user_rate_limits[user_id]
+            if current_time - timestamp < 60
+        ]
+
+        used_requests = len(user_rate_limits[user_id])
+        remaining_requests = max(0, 10 - used_requests)
+
+        return {
+            'used': used_requests,
+            'remaining': remaining_requests,
+            'limit': 10,
+            'window': 60
+        }
     
     def filter_ai_response(self, text):
         """过滤AI响应，移除推理过程和不必要的内容"""
@@ -412,7 +497,25 @@ def webhook():
         user_id = str(message.get('from', {}).get('id', chat_id))
         
         logger.info(f"Received message from {user_name} (ID: {user_id}): {user_message}")
-        
+
+        # Skip rate limiting for commands
+        if not user_message.startswith('/'):
+            # 检查用户速率限制
+            user_allowed, user_wait_time = openwebui_client.check_user_rate_limit(user_id)
+            if not user_allowed:
+                rate_limit_msg = f"⏱️ 您的请求过于频繁，请等待 {user_wait_time} 秒后再试。\n\n当前限制：每分钟最多10次请求。"
+                bot.send_message(chat_id, rate_limit_msg)
+                logger.warning(f"User {user_id} hit rate limit, wait time: {user_wait_time}s")
+                return jsonify({'ok': True})
+
+            # 检查会话速率限制
+            session_allowed, session_wait_time = openwebui_client.check_session_rate_limit(chat_id, user_id)
+            if not session_allowed:
+                session_limit_msg = f"🚀 请慢一点！您发送消息太快了，请等待 {session_wait_time} 秒。\n\n会话限制：10秒内最多3条消息。"
+                bot.send_message(chat_id, session_limit_msg)
+                logger.warning(f"Session {chat_id}_{user_id} hit rate limit, wait time: {session_wait_time}s")
+                return jsonify({'ok': True})
+
         # Handle /start command
         if user_message.startswith('/start'):
             openwebui_client.clear_conversation(user_id)
@@ -426,9 +529,11 @@ def webhook():
                           "• 直接发送消息与我对话\n" + \
                           "• /start - 开始新的对话（清除历史）\n" + \
                           "• /clear - 清除对话历史\n" + \
+                          "• /status - 查看速率限制状态\n" + \
                           "• /help - 查看帮助信息\n\n" + \
                           "💡 **提示：**\n" + \
-                          "• 我会记住我们的对话内容，支持上下文对话！"
+                          "• 我会记住我们的对话内容，支持上下文对话！\n" + \
+                          "• 请合理控制消息频率，避免触发速率限制"
             bot.send_message(chat_id, help_message)
             return jsonify({'ok': True})
         
@@ -438,6 +543,17 @@ def webhook():
             bot.send_message(chat_id, "✅ 对话历史已清除，我们可以开始新的对话了！")
             return jsonify({'ok': True})
 
+        # Handle /status command
+        if user_message.startswith('/status'):
+            status_info = openwebui_client.get_rate_limit_status(user_id)
+            status_message = f"📊 **您的速率限制状态**\n\n" + \
+                           f"🔢 已使用：{status_info['used']}/{status_info['limit']} 次\n" + \
+                           f"⏱️ 时间窗口：{status_info['window']} 秒\n" + \
+                           f"✅ 剩余请求：{status_info['remaining']} 次\n\n" + \
+                           f"🚀 会话限制：10秒内最多3条消息\n" + \
+                           f"⏰ 用户限制：每分钟最多10次请求"
+            bot.send_message(chat_id, status_message)
+            return jsonify({'ok': True})
 
         # Get response from OpenWebUI (non-streaming)
         ai_response = openwebui_client.simple_chat_completion(bot, chat_id, user_id, user_message)
