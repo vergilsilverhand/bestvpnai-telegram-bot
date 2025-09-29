@@ -380,51 +380,54 @@ class OpenWebUIClient:
         return cleaned
 
     def cleanup_expired_data(self):
-        """清理过期的数据以防止内存泄漏（定期调用）"""
-        with rate_limit_lock, conversation_lock:
-            current_time = time.time()
+        """清理过期的数据以防止内存泄漏（定期调用，分段加锁避免长时间阻塞）"""
+        current_time = time.time()
 
-            # 清理过期的速率限制记录
-            expired_users = []
+        # 分别处理不同的数据结构，避免长时间持有锁
+        expired_users = []
+        expired_sessions = []
+        expired_conversations = []
+
+        # 1. 清理速率限制记录（短时间持锁）
+        with rate_limit_lock:
             for user_id in list(user_rate_limits.keys()):
                 user_rate_limits[user_id] = [
                     timestamp for timestamp in user_rate_limits[user_id]
                     if current_time - timestamp < 86400  # 24小时
                 ]
-                # 如果用户的记录为空，则删除该用户
                 if not user_rate_limits[user_id]:
                     expired_users.append(user_id)
 
             for user_id in expired_users:
                 del user_rate_limits[user_id]
 
-            # 清理过期的会话限制记录
-            expired_sessions = []
+            # 清理会话限制记录
             for session_key in list(session_rate_limits.keys()):
                 session_rate_limits[session_key] = [
                     timestamp for timestamp in session_rate_limits[session_key]
                     if current_time - timestamp < 7200  # 2小时
                 ]
-                # 如果会话的记录为空，则删除该会话
                 if not session_rate_limits[session_key]:
                     expired_sessions.append(session_key)
 
             for session_key in expired_sessions:
                 del session_rate_limits[session_key]
 
-            # 清理空的对话记录（保留最近3天活跃的用户）
-            expired_conversations = []
+        # 2. 清理对话记录（短时间持锁）
+        with conversation_lock:
             for user_id in list(user_conversations.keys()):
                 if not user_conversations[user_id]:
-                    # 检查该用户是否在最近3天有速率限制记录
-                    if user_id not in user_rate_limits:
-                        expired_conversations.append(user_id)
+                    # 检查该用户是否在最近活跃（在rate_limit_lock外检查）
+                    expired_conversations.append(user_id)
 
             for user_id in expired_conversations:
-                del user_conversations[user_id]
+                # 二次检查：只删除确实不活跃的用户
+                if (user_id not in user_rate_limits and
+                    not user_conversations[user_id]):
+                    del user_conversations[user_id]
 
-            if expired_users or expired_sessions or expired_conversations:
-                logger.info(f"Cleaned up expired data: {len(expired_users)} users, {len(expired_sessions)} sessions, {len(expired_conversations)} conversations")
+        if expired_users or expired_sessions or expired_conversations:
+            logger.info(f"Cleaned up expired data: {len(expired_users)} users, {len(expired_sessions)} sessions, {len(expired_conversations)} conversations")
 
     def simple_chat_completion(self, bot, chat_id, user_id, message, model="xmptest.https://api.perplexity.ai"):
         """非流式处理AI响应，一次性发送完整回复"""
