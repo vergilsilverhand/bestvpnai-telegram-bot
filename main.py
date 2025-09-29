@@ -72,14 +72,32 @@ class TelegramBot:
         text = text.replace('<summary>', '*')
         text = text.replace('</summary>', '*\n')
 
-        # 处理链接格式 - Telegram不支持 [[1]] 这种格式
+        # 处理链接格式 - 保留有用的链接但简化格式
         import re
 
         # 将 [[数字]] 格式的引用转换为更简单的格式
         text = re.sub(r'\[\[(\d+)\]\]', r'[\1]', text)
 
-        # 处理复杂的链接格式，简化为普通文本
-        text = re.sub(r'\[([^\]]+)\]\(([^\)]+)\)', r'\1', text)
+        # 处理Markdown链接格式，智能保留有用链接
+        def replace_link(match):
+            link_text = match.group(1)
+            link_url = match.group(2)
+
+            # 如果链接文本本身就是URL或者很长的描述，只保留文本
+            if (link_url.lower() in link_text.lower() or
+                len(link_text) > 80 or
+                'youtube.com' in link_url or
+                'wikipedia.org' in link_url):
+                return link_text
+
+            # 如果是短标题且有有用的链接，保留简化格式
+            if len(link_text) < 30 and not link_text.startswith('http'):
+                return f"[{link_text}]({link_url})"
+
+            # 其他情况只保留文本
+            return link_text
+
+        text = re.sub(r'\[([^\]]+)\]\(([^\)]+)\)', replace_link, text)
 
         # 保护已有的加粗格式，但确保格式正确
         text = re.sub(r'\*\*([^*]+)\*\*', r'*\1*', text)
