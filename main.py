@@ -260,13 +260,13 @@ class OpenWebUIClient:
         """Clear user's conversation history"""
         user_conversations[user_id] = []
 
-    def check_user_rate_limit(self, user_id, max_requests=10, time_window=60):
+    def check_user_rate_limit(self, user_id, max_requests=5, time_window=86400):
         """
         检查用户速率限制
         Args:
             user_id: 用户ID
-            max_requests: 时间窗口内最大请求数 (默认: 10次)
-            time_window: 时间窗口秒数 (默认: 60秒)
+            max_requests: 时间窗口内最大请求数 (默认: 5次)
+            time_window: 时间窗口秒数 (默认: 86400秒 = 24小时)
         Returns:
             (bool, int): (是否允许, 剩余等待时间)
         """
@@ -289,13 +289,13 @@ class OpenWebUIClient:
         user_rate_limits[user_id].append(current_time)
         return True, 0
 
-    def check_session_rate_limit(self, chat_id, user_id, max_requests=3, time_window=10):
+    def check_session_rate_limit(self, chat_id, user_id, max_requests=2, time_window=10):
         """
         检查会话速率限制（防止快速连续消息）
         Args:
             chat_id: 聊天ID
             user_id: 用户ID
-            max_requests: 时间窗口内最大请求数 (默认: 3次)
+            max_requests: 时间窗口内最大请求数 (默认: 2次)
             time_window: 时间窗口秒数 (默认: 10秒)
         Returns:
             (bool, int): (是否允许, 剩余等待时间)
@@ -328,17 +328,17 @@ class OpenWebUIClient:
         # 清理过期记录
         user_rate_limits[user_id] = [
             timestamp for timestamp in user_rate_limits[user_id]
-            if current_time - timestamp < 60
+            if current_time - timestamp < 86400  # 24小时
         ]
 
         used_requests = len(user_rate_limits[user_id])
-        remaining_requests = max(0, 10 - used_requests)
+        remaining_requests = max(0, 5 - used_requests)
 
         return {
             'used': used_requests,
             'remaining': remaining_requests,
-            'limit': 10,
-            'window': 60
+            'limit': 5,
+            'window': 86400  # 24小时 = 86400秒
         }
     
     def filter_ai_response(self, text):
@@ -503,15 +503,23 @@ def webhook():
             # 检查用户速率限制
             user_allowed, user_wait_time = openwebui_client.check_user_rate_limit(user_id)
             if not user_allowed:
-                rate_limit_msg = f"⏱️ 您的请求过于频繁，请等待 {user_wait_time} 秒后再试。\n\n当前限制：每分钟最多10次请求。"
+                # 将等待时间转换为更友好的显示格式
+                if user_wait_time >= 3600:
+                    wait_display = f"{user_wait_time // 3600} 小时 {(user_wait_time % 3600) // 60} 分钟"
+                elif user_wait_time >= 60:
+                    wait_display = f"{user_wait_time // 60} 分钟 {user_wait_time % 60} 秒"
+                else:
+                    wait_display = f"{user_wait_time} 秒"
+
+                rate_limit_msg = f"⏱️ 您今日的请求次数已用完，请等待 {wait_display} 后再试。\n\n📋 每日限制：5次请求"
                 bot.send_message(chat_id, rate_limit_msg)
-                logger.warning(f"User {user_id} hit rate limit, wait time: {user_wait_time}s")
+                logger.warning(f"User {user_id} hit daily rate limit, wait time: {user_wait_time}s")
                 return jsonify({'ok': True})
 
             # 检查会话速率限制
             session_allowed, session_wait_time = openwebui_client.check_session_rate_limit(chat_id, user_id)
             if not session_allowed:
-                session_limit_msg = f"🚀 请慢一点！您发送消息太快了，请等待 {session_wait_time} 秒。\n\n会话限制：10秒内最多3条消息。"
+                session_limit_msg = f"🚀 请慢一点！您发送消息太快了，请等待 {session_wait_time} 秒。\n\n💬 会话限制：10秒内最多2条消息"
                 bot.send_message(chat_id, session_limit_msg)
                 logger.warning(f"Session {chat_id}_{user_id} hit rate limit, wait time: {session_wait_time}s")
                 return jsonify({'ok': True})
@@ -547,11 +555,12 @@ def webhook():
         if user_message.startswith('/status'):
             status_info = openwebui_client.get_rate_limit_status(user_id)
             status_message = f"📊 **您的速率限制状态**\n\n" + \
-                           f"🔢 已使用：{status_info['used']}/{status_info['limit']} 次\n" + \
-                           f"⏱️ 时间窗口：{status_info['window']} 秒\n" + \
-                           f"✅ 剩余请求：{status_info['remaining']} 次\n\n" + \
-                           f"🚀 会话限制：10秒内最多3条消息\n" + \
-                           f"⏰ 用户限制：每分钟最多10次请求"
+                           f"🔢 今日已使用：{status_info['used']}/{status_info['limit']} 次\n" + \
+                           f"✅ 剩余请求：{status_info['remaining']} 次\n" + \
+                           f"⏱️ 重置时间：每日00:00\n\n" + \
+                           f"📋 **限制说明：**\n" + \
+                           f"💬 会话限制：10秒内最多2条消息\n" + \
+                           f"📅 每日限制：24小时内最多5次请求"
             bot.send_message(chat_id, status_message)
             return jsonify({'ok': True})
 
