@@ -403,7 +403,7 @@ class OpenWebUIClient:
             for session_key in list(session_rate_limits.keys()):
                 session_rate_limits[session_key] = [
                     timestamp for timestamp in session_rate_limits[session_key]
-                    if current_time - timestamp < 600  # 10分钟
+                    if current_time - timestamp < 7200  # 2小时
                 ]
                 # 如果会话的记录为空，则删除该会话
                 if not session_rate_limits[session_key]:
