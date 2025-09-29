@@ -99,6 +99,16 @@ class TelegramBot:
 
         text = re.sub(r'\[([^\]]+)\]\(([^\)]+)\)', replace_link, text)
 
+        # 处理各种引用链接格式
+        # 格式1: 数字 (链接) -> 数字
+        text = re.sub(r'(\d+)\s*\(https?://[^\)]+\)', r'\1', text)
+
+        # 格式2: 纯链接引用 (链接) -> 移除
+        text = re.sub(r'\s*\(https?://[^\)]+\)', '', text)
+
+        # 清理连续多个空格
+        text = re.sub(r'\s{2,}', ' ', text)
+
         # 保护已有的加粗格式，但确保格式正确
         text = re.sub(r'\*\*([^*]+)\*\*', r'*\1*', text)
 
