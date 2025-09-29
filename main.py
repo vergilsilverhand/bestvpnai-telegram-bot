@@ -222,32 +222,72 @@ class OpenWebUIClient:
             response.raise_for_status()
             data = response.json()
 
+            # 添加调试日志
+            logger.info(f"API Response status: {response.status_code}")
+            logger.info(f"API Response keys: {list(data.keys()) if isinstance(data, dict) else 'Not a dict'}")
+            if 'choices' in data:
+                logger.info(f"Choices length: {len(data['choices'])}")
+                if len(data['choices']) > 0:
+                    choice = data['choices'][0]
+                    logger.info(f"First choice keys: {list(choice.keys()) if isinstance(choice, dict) else 'Not a dict'}")
+
             # 检查是否被取消
             if self.is_processing_cancelled(user_id):
                 bot.edit_message(chat_id, message_id, "❌ 处理已被取消")
                 self.clear_processing_status(user_id)
                 return "处理已被取消"
 
-            if 'choices' in data and len(data['choices']) > 0:
-                ai_response = data['choices'][0].get('message', {}).get('content', '')
-                if ai_response:
-                    # 过滤响应
-                    filtered_response = self.filter_ai_response(ai_response.strip())
-                    if filtered_response:
-                        # 更新消息为最终回复
-                        bot.edit_message(chat_id, message_id, filtered_response)
-                        self.add_to_conversation(user_id, "assistant", filtered_response)
-                        self.clear_processing_status(user_id)
-                        logger.info(f"Response length: {len(filtered_response)}")
-                        return filtered_response
-                    else:
-                        bot.edit_message(chat_id, message_id, "抱歉，我没有收到完整的回复，请稍后再试。")
-                        self.clear_processing_status(user_id)
-                        return "抱歉，我没有收到完整的回复，请稍后再试。"
+            # 尝试多种响应格式解析
+            ai_response = ""
 
-            bot.edit_message(chat_id, message_id, "抱歉，我没有收到有效的回复，请稍后再试。")
-            self.clear_processing_status(user_id)
-            return "抱歉，我没有收到有效的回复，请稍后再试。"
+            # 格式1: OpenAI标准格式 choices[0].message.content
+            if 'choices' in data and len(data['choices']) > 0:
+                choice = data['choices'][0]
+                if 'message' in choice and 'content' in choice['message']:
+                    ai_response = choice['message']['content']
+                    logger.info("Found response in choices[0].message.content format")
+                # 格式2: 有些API可能直接在choices[0]中有content
+                elif 'content' in choice:
+                    ai_response = choice['content']
+                    logger.info("Found response in choices[0].content format")
+                # 格式3: 检查text字段
+                elif 'text' in choice:
+                    ai_response = choice['text']
+                    logger.info("Found response in choices[0].text format")
+
+            # 格式4: 直接在根级别的content字段
+            if not ai_response and 'content' in data:
+                ai_response = data['content']
+                logger.info("Found response in root content format")
+
+            # 格式5: message字段
+            if not ai_response and 'message' in data:
+                if isinstance(data['message'], str):
+                    ai_response = data['message']
+                elif isinstance(data['message'], dict) and 'content' in data['message']:
+                    ai_response = data['message']['content']
+                logger.info("Found response in root message format")
+
+            if ai_response and ai_response.strip():
+                # 过滤响应
+                filtered_response = self.filter_ai_response(ai_response.strip())
+                if filtered_response:
+                    # 更新消息为最终回复
+                    bot.edit_message(chat_id, message_id, filtered_response)
+                    self.add_to_conversation(user_id, "assistant", filtered_response)
+                    self.clear_processing_status(user_id)
+                    logger.info(f"Response length: {len(filtered_response)}")
+                    return filtered_response
+                else:
+                    logger.warning("Response was filtered out completely")
+                    bot.edit_message(chat_id, message_id, "抱歉，我没有收到完整的回复，请稍后再试。")
+                    self.clear_processing_status(user_id)
+                    return "抱歉，我没有收到完整的回复，请稍后再试。"
+            else:
+                logger.warning(f"No valid response found in API response. Full response: {data}")
+                bot.edit_message(chat_id, message_id, "抱歉，我没有收到有效的回复，请稍后再试。")
+                self.clear_processing_status(user_id)
+                return "抱歉，我没有收到有效的回复，请稍后再试。"
 
         except Exception as e:
             logger.error(f"Chat completion error: {e}")
