@@ -68,14 +68,31 @@ class TelegramBot:
 
         import re
 
-        # 1. 处理引用链接格式：数字 (完整链接) -> 数字
-        text = re.sub(r'(\d+)\s*\(https?://[^\)]+\)', r'\1', text)
+        # 分割文本为正文和参考资料部分
+        reference_markers = ['🔍 详细信息', '🔍 *详细信息', '参考网站', '参考资料']
+        reference_section = ""
+        main_content = text
 
-        # 2. 移除孤立的链接：(完整链接) -> 移除
-        text = re.sub(r'\s*\(https?://[^\)]+\)', '', text)
+        for marker in reference_markers:
+            if marker in text:
+                parts = text.split(marker, 1)
+                if len(parts) == 2:
+                    main_content = parts[0]
+                    reference_section = marker + parts[1]
+                break
+
+        # 处理正文部分
+        # 1. 处理引用链接格式：数字 (完整链接) -> 数字（只在正文中）
+        main_content = re.sub(r'(\d+)\s*\(https?://[^\)]+\)', r'\1', main_content)
+
+        # 2. 移除孤立的链接：(完整链接) -> 移除（只在正文中）
+        main_content = re.sub(r'\s*\(https?://[^\)]+\)', '', main_content)
 
         # 3. 简化[[数字]]格式为[数字]
-        text = re.sub(r'\[\[(\d+)\]\]', r'[\1]', text)
+        main_content = re.sub(r'\[\[(\d+)\]\]', r'[\1]', main_content)
+
+        # 合并处理后的内容
+        text = main_content + reference_section
 
         # 4. 处理HTML标签
         text = text.replace('<details>', '\n\n🔍 *详细信息:*\n')
@@ -88,26 +105,45 @@ class TelegramBot:
         text = re.sub(r'([。！？])\s*-\s*', r'\1\n\n• ', text)
         text = re.sub(r'^-\s*', '• ', text, flags=re.MULTILINE)
 
-        # 6. 处理连续的引用数字，避免数字堆积
-        # 例如：内容124 -> 内容[1,2,4]
-        def format_references(match):
-            content = match.group(1)
-            numbers = match.group(2)
-            if len(numbers) > 3:  # 如果数字太多，格式化一下
-                num_list = ', '.join(numbers)
-                return f"{content}[{num_list}]"
-            return match.group(0)
+        # 6. 处理连续的引用数字，避免数字堆积（只在正文中）
+        lines = text.split('\n')
+        processed_lines = []
+        in_reference_section = False
 
-        text = re.sub(r'([^0-9])(\d{3,})\s*$', format_references, text, flags=re.MULTILINE)
+        for line in lines:
+            if any(marker in line for marker in reference_markers):
+                in_reference_section = True
+
+            if not in_reference_section:
+                # 在正文中处理连续数字
+                def format_references(match):
+                    content = match.group(1)
+                    numbers = match.group(2)
+                    if len(numbers) > 3:
+                        num_list = ', '.join(numbers)
+                        return f"{content}[{num_list}]"
+                    return match.group(0)
+
+                line = re.sub(r'([^0-9])(\d{3,})\s*$', format_references, line)
+
+            processed_lines.append(line)
+
+        text = '\n'.join(processed_lines)
 
         # 7. 改善段落分隔
         text = re.sub(r'([。！？])\s*([A-Z\u4e00-\u9fff])', r'\1\n\n\2', text)
 
-        # 8. 清理多余空格，但保留必要的换行
+        # 8. 在参考资料部分，改善链接格式显示
+        if reference_section:
+            # 确保参考资料中的链接格式更清晰
+            # 修复可能被破坏的Markdown链接
+            text = re.sub(r'(\d+):\s*([^-\n]+?)\s*-\s*([^\n]+)', r'\1: [\2](\3)', text)
+
+        # 9. 清理多余空格，但保留必要的换行
         text = re.sub(r'[ \t]+', ' ', text)  # 清理空格和tab
         text = re.sub(r'\n{3,}', '\n\n', text)  # 限制连续换行
 
-        # 9. 限制消息长度
+        # 10. 限制消息长度
         if len(text) > 4096:
             text = text[:4090] + "..."
 
