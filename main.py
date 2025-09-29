@@ -662,7 +662,13 @@ def webhook():
         # For non-command messages, apply rate limiting and process with AI
         else:
             # 检查用户速率限制（仅24小时限制）
+            logger.info(f"Checking rate limit for user {user_id}")
             user_allowed, user_wait_time = openwebui_client.check_user_rate_limit(user_id)
+
+            # 添加调试信息
+            current_status = openwebui_client.get_rate_limit_status(user_id)
+            logger.info(f"User {user_id} rate limit status: used={current_status['used']}, remaining={current_status['remaining']}, allowed={user_allowed}")
+
             if not user_allowed:
                 # 将等待时间转换为更友好的显示格式
                 if user_wait_time >= 3600:
@@ -678,6 +684,7 @@ def webhook():
                 return jsonify({'ok': True})
 
             # Get response from OpenWebUI (non-streaming)
+            logger.info(f"User {user_id} passed rate limit check, proceeding with AI request")
             ai_response = openwebui_client.simple_chat_completion(bot, chat_id, user_id, user_message)
         
         return jsonify({'ok': True})
@@ -690,6 +697,30 @@ def webhook():
 def health():
     """Health check endpoint"""
     return jsonify({'status': 'healthy', 'service': 'bestvpnai-bot'})
+
+@app.route('/debug-rate-limits', methods=['GET'])
+def debug_rate_limits():
+    """Debug endpoint to check current rate limit data"""
+    import time
+    current_time = time.time()
+
+    # 清理并显示用户速率限制数据
+    debug_data = {
+        'current_time': current_time,
+        'user_rate_limits': {},
+        'total_users': len(user_rate_limits)
+    }
+
+    # 显示最近活跃的用户
+    for user_id, timestamps in list(user_rate_limits.items())[:10]:  # 只显示前10个用户
+        valid_timestamps = [ts for ts in timestamps if current_time - ts < 86400]
+        debug_data['user_rate_limits'][user_id] = {
+            'total_requests': len(timestamps),
+            'valid_requests_24h': len(valid_timestamps),
+            'timestamps': [f"{current_time - ts:.0f}s ago" for ts in valid_timestamps[-5:]]  # 最近5次
+        }
+
+    return jsonify(debug_data)
 
 @app.route('/', methods=['GET'])
 def index():
