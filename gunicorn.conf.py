@@ -7,7 +7,7 @@ bind = f"0.0.0.0:{os.environ.get('PORT', 5000)}"
 backlog = 2048
 
 # Worker processes
-workers = 2  # 增加worker数量以支持并发
+workers = 1  # 使用单worker确保rate limit数据一致性
 worker_class = "sync"
 worker_connections = 1000
 timeout = 300  # 减少超时时间到5分钟，避免过长阻塞
