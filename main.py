@@ -583,33 +583,7 @@ def webhook():
         
         logger.info(f"Received message from {user_name} (ID: {user_id}): {user_message}")
 
-        # Skip rate limiting for commands
-        if not user_message.startswith('/'):
-            # 检查用户速率限制
-            user_allowed, user_wait_time = openwebui_client.check_user_rate_limit(user_id)
-            if not user_allowed:
-                # 将等待时间转换为更友好的显示格式
-                if user_wait_time >= 3600:
-                    wait_display = f"{user_wait_time // 3600} 小时 {(user_wait_time % 3600) // 60} 分钟"
-                elif user_wait_time >= 60:
-                    wait_display = f"{user_wait_time // 60} 分钟 {user_wait_time % 60} 秒"
-                else:
-                    wait_display = f"{user_wait_time} 秒"
-
-                rate_limit_msg = f"⏱️ 您今日的请求次数已用完，请等待 {wait_display} 后再试。\n\n📋 每日限制：5次请求\n\n💡 *BestVPN翻墙利器，解锁更多更强的AI工具：https://vp0.org*"
-                bot.send_message(chat_id, rate_limit_msg)
-                logger.warning(f"User {user_id} hit daily rate limit, wait time: {user_wait_time}s")
-                return jsonify({'ok': True})
-
-            # 检查会话速率限制
-            session_allowed, session_wait_time = openwebui_client.check_session_rate_limit(chat_id, user_id)
-            if not session_allowed:
-                session_limit_msg = f"🚀 请慢一点！您发送消息太快了，请等待 {session_wait_time} 秒。\n\n💬 会话限制：10秒内最多2条消息\n\n💡 *BestVPN翻墙利器，解锁更多更强的AI工具：https://vp0.org*"
-                bot.send_message(chat_id, session_limit_msg)
-                logger.warning(f"Session {chat_id}_{user_id} hit rate limit, wait time: {session_wait_time}s")
-                return jsonify({'ok': True})
-
-        # Handle /start command
+        # Handle commands first (no rate limiting for commands)
         if user_message.startswith('/start'):
             logger.info(f"Processing /start command for user {user_name} (ID: {user_id})")
             openwebui_client.clear_conversation(user_id)
@@ -641,9 +615,8 @@ def webhook():
             else:
                 logger.error("Failed to send welcome message")
             return jsonify({'ok': True})
-        
-        # Handle /help command
-        if user_message.startswith('/help'):
+
+        elif user_message.startswith('/help'):
             help_message = "🌐 **搜外网 - 使用指南**\n\n" + \
                           "🤖 **关于搜外网**\n" + \
                           "• AI驱动的智能信息助手\n" + \
@@ -670,15 +643,13 @@ def webhook():
                           "💡 *BestVPN翻墙利器，解锁更多更强的AI工具：https://vp0.org*"
             bot.send_message(chat_id, help_message)
             return jsonify({'ok': True})
-        
-        # Handle /clear command
-        if user_message.startswith('/clear'):
+
+        elif user_message.startswith('/clear'):
             openwebui_client.clear_conversation(user_id)
             bot.send_message(chat_id, "✅ 对话历史已清除，我们可以开始新的对话了！")
             return jsonify({'ok': True})
 
-        # Handle /status command
-        if user_message.startswith('/status'):
+        elif user_message.startswith('/status'):
             status_info = openwebui_client.get_rate_limit_status(user_id)
             status_message = f"📊 **您的速率限制状态**\n\n" + \
                            f"🔢 今日已使用：{status_info['used']}/{status_info['limit']} 次\n" + \
@@ -690,8 +661,34 @@ def webhook():
             bot.send_message(chat_id, status_message)
             return jsonify({'ok': True})
 
-        # Get response from OpenWebUI (non-streaming)
-        ai_response = openwebui_client.simple_chat_completion(bot, chat_id, user_id, user_message)
+        # For non-command messages, apply rate limiting and process with AI
+        else:
+            # 检查用户速率限制
+            user_allowed, user_wait_time = openwebui_client.check_user_rate_limit(user_id)
+            if not user_allowed:
+                # 将等待时间转换为更友好的显示格式
+                if user_wait_time >= 3600:
+                    wait_display = f"{user_wait_time // 3600} 小时 {(user_wait_time % 3600) // 60} 分钟"
+                elif user_wait_time >= 60:
+                    wait_display = f"{user_wait_time // 60} 分钟 {user_wait_time % 60} 秒"
+                else:
+                    wait_display = f"{user_wait_time} 秒"
+
+                rate_limit_msg = f"⏱️ 您今日的请求次数已用完，请等待 {wait_display} 后再试。\n\n📋 每日限制：5次请求\n\n💡 *BestVPN翻墙利器，解锁更多更强的AI工具：https://vp0.org*"
+                bot.send_message(chat_id, rate_limit_msg)
+                logger.warning(f"User {user_id} hit daily rate limit, wait time: {user_wait_time}s")
+                return jsonify({'ok': True})
+
+            # 检查会话速率限制
+            session_allowed, session_wait_time = openwebui_client.check_session_rate_limit(chat_id, user_id)
+            if not session_allowed:
+                session_limit_msg = f"🚀 请慢一点！您发送消息太快了，请等待 {session_wait_time} 秒。\n\n💬 会话限制：10秒内最多2条消息\n\n💡 *BestVPN翻墙利器，解锁更多更强的AI工具：https://vp0.org*"
+                bot.send_message(chat_id, session_limit_msg)
+                logger.warning(f"Session {chat_id}_{user_id} hit rate limit, wait time: {session_wait_time}s")
+                return jsonify({'ok': True})
+
+            # Get response from OpenWebUI (non-streaming)
+            ai_response = openwebui_client.simple_chat_completion(bot, chat_id, user_id, user_message)
         
         return jsonify({'ok': True})
         
