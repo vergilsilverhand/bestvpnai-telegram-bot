@@ -609,21 +609,36 @@ def webhook():
         # Handle /start command
         if user_message.startswith('/start'):
             openwebui_client.clear_conversation(user_id)
-            welcome_message = f"你好 {user_name}! 👋\n\n我是由 BestVPN AI 提供支持的智能助手。\n\n请随时向我提问，我会记住我们的对话内容！"
+            welcome_message = f"👋 你好 {user_name}！\n\n🌐 **欢迎使用搜外网**\n\n🤖 我是您的专属信息助手，基于先进AI技术驱动，专门为您提供：\n\n🔍 **核心功能**\n• 搜索任何外网资讯和信息\n• 实时获取全球最新动态\n• 智能分析和整理信息\n• 多语言内容理解和翻译\n\n💬 **智能对话**\n• 支持连续对话，记住上下文\n• 个性化回答您的问题\n• 24/7随时为您服务\n\n✨ 直接发送您想了解的任何问题，我会为您搜索并提供详细信息！\n\n💡 *BestVPN翻墙利器，解锁更多更强的AI工具：https://vp0.org*"
             bot.send_message(chat_id, welcome_message)
             return jsonify({'ok': True})
         
         # Handle /help command
         if user_message.startswith('/help'):
-            help_message = "🤖 **使用说明**\n\n" + \
-                          "• 直接发送消息与我对话\n" + \
-                          "• /start - 开始新的对话（清除历史）\n" + \
+            help_message = "🌐 **搜外网 - 使用指南**\n\n" + \
+                          "🤖 **关于搜外网**\n" + \
+                          "• AI驱动的智能信息助手\n" + \
+                          "• 专业搜索外网资讯和信息\n" + \
+                          "• 实时获取全球最新动态\n\n" + \
+                          "📋 **可用命令**\n" + \
+                          "• 直接发送问题 - 搜索并获取信息\n" + \
+                          "• /start - 开始使用（清除对话历史）\n" + \
                           "• /clear - 清除对话历史\n" + \
-                          "• /status - 查看速率限制状态\n" + \
-                          "• /help - 查看帮助信息\n\n" + \
-                          "💡 **提示：**\n" + \
-                          "• 我会记住我们的对话内容，支持上下文对话！\n" + \
-                          "• 请合理控制消息频率，避免触发速率限制"
+                          "• /status - 查看使用限制状态\n" + \
+                          "• /help - 查看本帮助信息\n\n" + \
+                          "🔍 **使用示例**\n" + \
+                          "• 「特斯拉最新财报」\n" + \
+                          "• 「比特币今日价格走势」\n" + \
+                          "• 「OpenAI最新动态」\n" + \
+                          "• 「美国大选最新消息」\n\n" + \
+                          "💡 **智能特性**\n" + \
+                          "• 支持上下文对话，记住聊天内容\n" + \
+                          "• 自动翻译和整理信息\n" + \
+                          "• 提供准确的外网资讯\n\n" + \
+                          "⚡ **使用限制**\n" + \
+                          "• 每日限制：5次搜索请求\n" + \
+                          "• 会话限制：10秒内最多2条消息\n\n" + \
+                          "💡 *BestVPN翻墙利器，解锁更多更强的AI工具：https://vp0.org*"
             bot.send_message(chat_id, help_message)
             return jsonify({'ok': True})
         
@@ -664,9 +679,18 @@ def health():
 def index():
     """Root endpoint"""
     return jsonify({
-        'name': 'BestVPN AI Telegram Bot',
+        'name': '搜外网 (SouWaiWang)',
         'status': 'running',
-        'description': 'Telegram bot powered by OpenWebUI API'
+        'description': 'AI-powered global information search assistant - Your gateway to worldwide news and information',
+        'features': [
+            '🔍 Search external websites and global news',
+            '🤖 AI-driven intelligent responses',
+            '🌐 Multi-language support and translation',
+            '💬 Context-aware conversations',
+            '⚡ Real-time information retrieval'
+        ],
+        'version': '1.0.0',
+        'powered_by': 'OpenWebUI API & BestVPN'
     })
 
 if __name__ == '__main__':
