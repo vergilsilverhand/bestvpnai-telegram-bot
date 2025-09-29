@@ -68,8 +68,6 @@ class TelegramBot:
 
         import re
 
-        # 只处理最基本的问题格式，保留其他格式
-
         # 1. 处理引用链接格式：数字 (完整链接) -> 数字
         text = re.sub(r'(\d+)\s*\(https?://[^\)]+\)', r'\1', text)
 
@@ -80,19 +78,40 @@ class TelegramBot:
         text = re.sub(r'\[\[(\d+)\]\]', r'[\1]', text)
 
         # 4. 处理HTML标签
-        text = text.replace('<details>', '\n🔍 *详细信息:*\n')
+        text = text.replace('<details>', '\n\n🔍 *详细信息:*\n')
         text = text.replace('</details>', '\n')
         text = text.replace('<summary>', '*')
         text = text.replace('</summary>', '*\n')
 
-        # 5. 清理多余空格
-        text = re.sub(r'\s{2,}', ' ', text)
+        # 5. 改善段落和列表格式
+        # 确保列表项前有换行
+        text = re.sub(r'([。！？])\s*-\s*', r'\1\n\n• ', text)
+        text = re.sub(r'^-\s*', '• ', text, flags=re.MULTILINE)
 
-        # 6. 限制消息长度
+        # 6. 处理连续的引用数字，避免数字堆积
+        # 例如：内容124 -> 内容[1,2,4]
+        def format_references(match):
+            content = match.group(1)
+            numbers = match.group(2)
+            if len(numbers) > 3:  # 如果数字太多，格式化一下
+                num_list = ', '.join(numbers)
+                return f"{content}[{num_list}]"
+            return match.group(0)
+
+        text = re.sub(r'([^0-9])(\d{3,})\s*$', format_references, text, flags=re.MULTILINE)
+
+        # 7. 改善段落分隔
+        text = re.sub(r'([。！？])\s*([A-Z\u4e00-\u9fff])', r'\1\n\n\2', text)
+
+        # 8. 清理多余空格，但保留必要的换行
+        text = re.sub(r'[ \t]+', ' ', text)  # 清理空格和tab
+        text = re.sub(r'\n{3,}', '\n\n', text)  # 限制连续换行
+
+        # 9. 限制消息长度
         if len(text) > 4096:
             text = text[:4090] + "..."
 
-        return text
+        return text.strip()
 
     def edit_message(self, chat_id, message_id, text):
         """Edit existing message in Telegram chat"""
