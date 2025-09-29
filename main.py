@@ -638,8 +638,7 @@ def webhook():
                           "• 自动翻译和整理信息\n" + \
                           "• 提供准确的外网资讯\n\n" + \
                           "⚡ **使用限制**\n" + \
-                          "• 每日限制：5次搜索请求\n" + \
-                          "• 会话限制：10秒内最多2条消息\n\n" + \
+                          "• 每日限制：5次搜索请求\n\n" + \
                           "💡 *BestVPN翻墙利器，解锁更多更强的AI工具：https://vp0.org*"
             bot.send_message(chat_id, help_message)
             return jsonify({'ok': True})
@@ -656,14 +655,13 @@ def webhook():
                            f"✅ 剩余请求：{status_info['remaining']} 次\n" + \
                            f"⏱️ 重置时间：每日00:00\n\n" + \
                            f"📋 **限制说明：**\n" + \
-                           f"💬 会话限制：10秒内最多2条消息\n" + \
                            f"📅 每日限制：24小时内最多5次请求"
             bot.send_message(chat_id, status_message)
             return jsonify({'ok': True})
 
         # For non-command messages, apply rate limiting and process with AI
         else:
-            # 检查用户速率限制
+            # 检查用户速率限制（仅24小时限制）
             user_allowed, user_wait_time = openwebui_client.check_user_rate_limit(user_id)
             if not user_allowed:
                 # 将等待时间转换为更友好的显示格式
@@ -677,14 +675,6 @@ def webhook():
                 rate_limit_msg = f"⏱️ 您今日的请求次数已用完，请等待 {wait_display} 后再试。\n\n📋 每日限制：5次请求\n\n💡 *BestVPN翻墙利器，解锁更多更强的AI工具：https://vp0.org*"
                 bot.send_message(chat_id, rate_limit_msg)
                 logger.warning(f"User {user_id} hit daily rate limit, wait time: {user_wait_time}s")
-                return jsonify({'ok': True})
-
-            # 检查会话速率限制
-            session_allowed, session_wait_time = openwebui_client.check_session_rate_limit(chat_id, user_id)
-            if not session_allowed:
-                session_limit_msg = f"🚀 请慢一点！您发送消息太快了，请等待 {session_wait_time} 秒。\n\n💬 会话限制：10秒内最多2条消息\n\n💡 *BestVPN翻墙利器，解锁更多更强的AI工具：https://vp0.org*"
-                bot.send_message(chat_id, session_limit_msg)
-                logger.warning(f"Session {chat_id}_{user_id} hit rate limit, wait time: {session_wait_time}s")
                 return jsonify({'ok': True})
 
             # Get response from OpenWebUI (non-streaming)
