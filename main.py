@@ -144,7 +144,7 @@ class OpenWebUIClient:
             
         return cleaned
     
-    def stream_chat_completion(self, bot, chat_id, user_id, message, model="orm_anan.unirouter/qwen/qwen3-235b-a22b"):
+    def stream_chat_completion(self, bot, chat_id, user_id, message, model="xmptest.https://api.perplexity.ai"):
         """流式处理AI响应并实时更新Telegram消息"""
         url = f"{self.base_url}/api/chat/completions"
         headers = {
@@ -227,7 +227,7 @@ class OpenWebUIClient:
             bot.edit_message(chat_id, message_id, "抱歉，处理您的请求时出现了问题，请稍后再试。")
             return "抱歉，处理您的请求时出现了问题，请稍后再试。"
     
-    def chat_completion(self, user_id, message, model="orm_anan.unirouter/qwen/qwen3-235b-a22b"):
+    def chat_completion(self, user_id, message, model="xmptest.https://api.perplexity.ai"):
         """Send chat completion request to OpenWebUI with conversation context"""
         url = f"{self.base_url}/api/chat/completions"
         headers = {
