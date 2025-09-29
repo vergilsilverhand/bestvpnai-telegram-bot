@@ -133,11 +133,42 @@ class TelegramBot:
         # 7. 改善段落分隔
         text = re.sub(r'([。！？])\s*([A-Z\u4e00-\u9fff])', r'\1\n\n\2', text)
 
-        # 8. 在参考资料部分，改善链接格式显示
+        # 8. 修复参考资料部分的链接格式
         if reference_section:
-            # 确保参考资料中的链接格式更清晰
-            # 修复可能被破坏的Markdown链接
-            text = re.sub(r'(\d+):\s*([^-\n]+?)\s*-\s*([^\n]+)', r'\1: [\2](\3)', text)
+            # 分割出参考资料部分进行特殊处理
+            ref_lines = text.split('\n')
+            processed_ref_lines = []
+            in_ref_section = False
+
+            for line in ref_lines:
+                if any(marker in line for marker in reference_markers):
+                    in_ref_section = True
+                    processed_ref_lines.append(line)
+                    continue
+
+                if in_ref_section and line.strip():
+                    # 修复被破坏的markdown链接格式
+                    # 处理格式：数字: [文本 (URL)](URL) -> 数字: [文本](URL)
+                    line = re.sub(r'(\d+):\s*\[([^\]]+?)\s*\(([^)]+)\)\]\(([^)]+)\)', r'\1: [\2](\3)', line)
+
+                    # 处理格式：数字: [文本) -> 数字: 文本（移除不完整的方括号）
+                    line = re.sub(r'(\d+):\s*\[([^\]]+?)\)', r'\1: \2', line)
+
+                    # 处理正常的markdown链接，确保格式正确
+                    # 如果有完整的 [文本](URL) 格式，保持不变
+                    # 如果只有文本和URL分离的情况，尝试组合
+                    if '(' in line and ')' in line and '[' not in line:
+                        # 格式：数字: 文本 (URL) -> 数字: [文本](URL)
+                        match = re.match(r'(\d+):\s*([^(]+?)\s*\(([^)]+)\)', line)
+                        if match:
+                            num, title, url = match.groups()
+                            title = title.strip()
+                            if url.startswith('http'):
+                                line = f"{num}: [{title}]({url})"
+
+                processed_ref_lines.append(line)
+
+            text = '\n'.join(processed_ref_lines)
 
         # 9. 清理多余空格，但保留必要的换行
         text = re.sub(r'[ \t]+', ' ', text)  # 清理空格和tab
