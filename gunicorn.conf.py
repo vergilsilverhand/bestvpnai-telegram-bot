@@ -7,10 +7,10 @@ bind = f"0.0.0.0:{os.environ.get('PORT', 5000)}"
 backlog = 2048
 
 # Worker processes
-workers = 1
+workers = 2  # 增加worker数量以支持并发
 worker_class = "sync"
 worker_connections = 1000
-timeout = 600  # 10 minutes for long AI processing
+timeout = 300  # 减少超时时间到5分钟，避免过长阻塞
 keepalive = 2
 
 # Request handling

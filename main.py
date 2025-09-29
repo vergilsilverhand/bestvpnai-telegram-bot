@@ -4,6 +4,7 @@ import requests
 import json
 import re
 import time
+import threading
 from flask import Flask, request, jsonify
 from collections import defaultdict
 
@@ -22,6 +23,10 @@ user_conversations = defaultdict(list)
 # 速率限制存储
 user_rate_limits = defaultdict(list)  # {user_id: [timestamp1, timestamp2, ...]}
 session_rate_limits = defaultdict(list)  # {session_key: [timestamp1, timestamp2, ...]}
+
+# 线程锁，确保速率限制检查的原子性
+rate_limit_lock = threading.Lock()
+conversation_lock = threading.Lock()
 
 
 class TelegramBot:
@@ -246,23 +251,26 @@ class OpenWebUIClient:
             return []
     
     def add_to_conversation(self, user_id, role, content):
-        """Add message to user's conversation history"""
-        user_conversations[user_id].append({"role": role, "content": content})
-        # 保持最近20条消息的历史
-        if len(user_conversations[user_id]) > 20:
-            user_conversations[user_id] = user_conversations[user_id][-20:]
+        """Add message to user's conversation history（线程安全版本）"""
+        with conversation_lock:
+            user_conversations[user_id].append({"role": role, "content": content})
+            # 保持最近20条消息的历史
+            if len(user_conversations[user_id]) > 20:
+                user_conversations[user_id] = user_conversations[user_id][-20:]
     
     def get_conversation_history(self, user_id):
-        """Get user's conversation history"""
-        return user_conversations[user_id]
-    
+        """Get user's conversation history（线程安全版本）"""
+        with conversation_lock:
+            return user_conversations[user_id].copy()  # 返回副本避免外部修改
+
     def clear_conversation(self, user_id):
-        """Clear user's conversation history"""
-        user_conversations[user_id] = []
+        """Clear user's conversation history（线程安全版本）"""
+        with conversation_lock:
+            user_conversations[user_id] = []
 
     def check_user_rate_limit(self, user_id, max_requests=5, time_window=86400):
         """
-        检查用户速率限制
+        检查用户速率限制（线程安全版本）
         Args:
             user_id: 用户ID
             max_requests: 时间窗口内最大请求数 (默认: 5次)
@@ -270,28 +278,28 @@ class OpenWebUIClient:
         Returns:
             (bool, int): (是否允许, 剩余等待时间)
         """
-        import time
-        current_time = time.time()
+        with rate_limit_lock:
+            current_time = time.time()
 
-        # 清理过期的时间戳
-        user_rate_limits[user_id] = [
-            timestamp for timestamp in user_rate_limits[user_id]
-            if current_time - timestamp < time_window
-        ]
+            # 清理过期的时间戳
+            user_rate_limits[user_id] = [
+                timestamp for timestamp in user_rate_limits[user_id]
+                if current_time - timestamp < time_window
+            ]
 
-        # 检查是否超过限制
-        if len(user_rate_limits[user_id]) >= max_requests:
-            oldest_request = min(user_rate_limits[user_id])
-            wait_time = int(time_window - (current_time - oldest_request))
-            return False, wait_time
+            # 检查是否超过限制
+            if len(user_rate_limits[user_id]) >= max_requests:
+                oldest_request = min(user_rate_limits[user_id])
+                wait_time = int(time_window - (current_time - oldest_request))
+                return False, wait_time
 
-        # 记录当前请求
-        user_rate_limits[user_id].append(current_time)
-        return True, 0
+            # 记录当前请求
+            user_rate_limits[user_id].append(current_time)
+            return True, 0
 
     def check_session_rate_limit(self, chat_id, user_id, max_requests=2, time_window=10):
         """
-        检查会话速率限制（防止快速连续消息）
+        检查会话速率限制（防止快速连续消息，线程安全版本）
         Args:
             chat_id: 聊天ID
             user_id: 用户ID
@@ -300,46 +308,46 @@ class OpenWebUIClient:
         Returns:
             (bool, int): (是否允许, 剩余等待时间)
         """
-        import time
-        current_time = time.time()
-        session_key = f"{chat_id}_{user_id}"
+        with rate_limit_lock:
+            current_time = time.time()
+            session_key = f"{chat_id}_{user_id}"
 
-        # 清理过期的时间戳
-        session_rate_limits[session_key] = [
-            timestamp for timestamp in session_rate_limits[session_key]
-            if current_time - timestamp < time_window
-        ]
+            # 清理过期的时间戳
+            session_rate_limits[session_key] = [
+                timestamp for timestamp in session_rate_limits[session_key]
+                if current_time - timestamp < time_window
+            ]
 
-        # 检查是否超过限制
-        if len(session_rate_limits[session_key]) >= max_requests:
-            oldest_request = min(session_rate_limits[session_key])
-            wait_time = int(time_window - (current_time - oldest_request))
-            return False, wait_time
+            # 检查是否超过限制
+            if len(session_rate_limits[session_key]) >= max_requests:
+                oldest_request = min(session_rate_limits[session_key])
+                wait_time = int(time_window - (current_time - oldest_request))
+                return False, wait_time
 
-        # 记录当前请求
-        session_rate_limits[session_key].append(current_time)
-        return True, 0
+            # 记录当前请求
+            session_rate_limits[session_key].append(current_time)
+            return True, 0
 
     def get_rate_limit_status(self, user_id):
-        """获取用户当前的速率限制状态"""
-        import time
-        current_time = time.time()
+        """获取用户当前的速率限制状态（线程安全版本）"""
+        with rate_limit_lock:
+            current_time = time.time()
 
-        # 清理过期记录
-        user_rate_limits[user_id] = [
-            timestamp for timestamp in user_rate_limits[user_id]
-            if current_time - timestamp < 86400  # 24小时
-        ]
+            # 清理过期记录
+            user_rate_limits[user_id] = [
+                timestamp for timestamp in user_rate_limits[user_id]
+                if current_time - timestamp < 86400  # 24小时
+            ]
 
-        used_requests = len(user_rate_limits[user_id])
-        remaining_requests = max(0, 5 - used_requests)
+            used_requests = len(user_rate_limits[user_id])
+            remaining_requests = max(0, 5 - used_requests)
 
-        return {
-            'used': used_requests,
-            'remaining': remaining_requests,
-            'limit': 5,
-            'window': 86400  # 24小时 = 86400秒
-        }
+            return {
+                'used': used_requests,
+                'remaining': remaining_requests,
+                'limit': 5,
+                'window': 86400  # 24小时 = 86400秒
+            }
     
     def filter_ai_response(self, text):
         """过滤AI响应，移除推理过程和不必要的内容"""
@@ -370,7 +378,53 @@ class OpenWebUIClient:
             return ""
             
         return cleaned
-    
+
+    def cleanup_expired_data(self):
+        """清理过期的数据以防止内存泄漏（定期调用）"""
+        with rate_limit_lock, conversation_lock:
+            current_time = time.time()
+
+            # 清理过期的速率限制记录
+            expired_users = []
+            for user_id in list(user_rate_limits.keys()):
+                user_rate_limits[user_id] = [
+                    timestamp for timestamp in user_rate_limits[user_id]
+                    if current_time - timestamp < 86400  # 24小时
+                ]
+                # 如果用户的记录为空，则删除该用户
+                if not user_rate_limits[user_id]:
+                    expired_users.append(user_id)
+
+            for user_id in expired_users:
+                del user_rate_limits[user_id]
+
+            # 清理过期的会话限制记录
+            expired_sessions = []
+            for session_key in list(session_rate_limits.keys()):
+                session_rate_limits[session_key] = [
+                    timestamp for timestamp in session_rate_limits[session_key]
+                    if current_time - timestamp < 600  # 10分钟
+                ]
+                # 如果会话的记录为空，则删除该会话
+                if not session_rate_limits[session_key]:
+                    expired_sessions.append(session_key)
+
+            for session_key in expired_sessions:
+                del session_rate_limits[session_key]
+
+            # 清理空的对话记录（保留最近3天活跃的用户）
+            expired_conversations = []
+            for user_id in list(user_conversations.keys()):
+                if not user_conversations[user_id]:
+                    # 检查该用户是否在最近3天有速率限制记录
+                    if user_id not in user_rate_limits:
+                        expired_conversations.append(user_id)
+
+            for user_id in expired_conversations:
+                del user_conversations[user_id]
+
+            if expired_users or expired_sessions or expired_conversations:
+                logger.info(f"Cleaned up expired data: {len(expired_users)} users, {len(expired_sessions)} sessions, {len(expired_conversations)} conversations")
 
     def simple_chat_completion(self, bot, chat_id, user_id, message, model="xmptest.https://api.perplexity.ai"):
         """非流式处理AI响应，一次性发送完整回复"""
@@ -415,7 +469,7 @@ class OpenWebUIClient:
             logger.info(f"Using model: {model}")
             logger.info(f"Request payload keys: {list(payload.keys())}")
 
-            response = requests.post(url, headers=headers, json=payload, timeout=600, stream=True)
+            response = requests.post(url, headers=headers, json=payload, timeout=300, stream=True)  # 减少到5分钟
             logger.info(f"Response status: {response.status_code}")
 
             # 如果状态码不是200，记录详细错误信息
@@ -468,13 +522,41 @@ class OpenWebUIClient:
                 bot.edit_message(chat_id, message_id, error_msg)
                 return error_msg
 
+        except requests.exceptions.Timeout:
+            logger.error("API request timeout")
+            error_msg = "请求超时，请稍后再试。可能是AI服务较忙。"
+            bot.edit_message(chat_id, message_id, error_msg)
+            return error_msg
+        except requests.exceptions.RequestException as e:
+            logger.error(f"API request error: {e}")
+            error_msg = "网络连接错误，请检查网络后再试。"
+            bot.edit_message(chat_id, message_id, error_msg)
+            return error_msg
         except Exception as e:
             logger.error(f"Chat completion error: {e}")
-            bot.edit_message(chat_id, message_id, "抱歉，处理您的请求时出现了问题，请稍后再试。")
-            return "抱歉，处理您的请求时出现了问题，请稍后再试。"
+            error_msg = "处理请求时出现未知错误，请稍后再试。"
+            bot.edit_message(chat_id, message_id, error_msg)
+            return error_msg
 
 bot = TelegramBot()
 openwebui_client = OpenWebUIClient()
+
+# 定期清理过期数据的简单实现
+import threading
+import time
+
+def periodic_cleanup():
+    """后台线程定期清理过期数据"""
+    while True:
+        try:
+            time.sleep(3600)  # 每小时清理一次
+            openwebui_client.cleanup_expired_data()
+        except Exception as e:
+            logger.error(f"Cleanup error: {e}")
+
+# 启动清理线程
+cleanup_thread = threading.Thread(target=periodic_cleanup, daemon=True)
+cleanup_thread.start()
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
