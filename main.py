@@ -186,14 +186,22 @@ class OpenWebUIClient:
         # 获取完整对话历史
         messages = self.get_conversation_history(user_id)
 
-        # OpenWebUI标准payload格式
+        # OpenWebUI标准payload格式，尝试不同的参数组合
         payload = {
             "model": model,
             "messages": messages,
             "stream": False,
-            "max_tokens": 4000,
-            "temperature": 0.7
+            "max_tokens": 2000,  # 降低max_tokens
+            "temperature": 0.7,
+            "top_p": 0.9,  # 添加top_p参数
+            "presence_penalty": 0,
+            "frequency_penalty": 0
         }
+
+        # 记录消息历史用于调试
+        logger.info(f"Message history length: {len(messages)}")
+        for i, msg in enumerate(messages[-3:]):  # 只记录最近3条消息
+            logger.info(f"Message {i}: {msg['role']} - {msg['content'][:50]}...")
 
         # 发送等待状态消息
         status_msg = bot.send_message(chat_id, "🤔 正在思考中，请稍候...\n\n💡 发送 /cancel 可以取消当前处理")
@@ -274,26 +282,44 @@ class OpenWebUIClient:
                     ai_response = data['message']['content']
                 logger.info("Found response in root message format")
 
+            # 检查响应内容
+            logger.info(f"Raw AI response: '{ai_response}'")
+            logger.info(f"AI response length: {len(ai_response) if ai_response else 0}")
+
             if ai_response and ai_response.strip():
                 # 过滤响应
                 filtered_response = self.filter_ai_response(ai_response.strip())
+                logger.info(f"Filtered response: '{filtered_response[:100]}...' (length: {len(filtered_response) if filtered_response else 0})")
+
                 if filtered_response:
                     # 更新消息为最终回复
                     bot.edit_message(chat_id, message_id, filtered_response)
                     self.add_to_conversation(user_id, "assistant", filtered_response)
                     self.clear_processing_status(user_id)
-                    logger.info(f"Response length: {len(filtered_response)}")
+                    logger.info(f"Successfully sent response, length: {len(filtered_response)}")
                     return filtered_response
                 else:
-                    logger.warning("Response was filtered out completely")
-                    bot.edit_message(chat_id, message_id, "抱歉，我没有收到完整的回复，请稍后再试。")
-                    self.clear_processing_status(user_id)
-                    return "抱歉，我没有收到完整的回复，请稍后再试。"
+                    logger.warning("Response was filtered out completely by filter_ai_response")
+                    # 如果过滤后为空，尝试使用原始响应
+                    if ai_response.strip():
+                        bot.edit_message(chat_id, message_id, ai_response.strip())
+                        self.add_to_conversation(user_id, "assistant", ai_response.strip())
+                        self.clear_processing_status(user_id)
+                        logger.info(f"Used unfiltered response, length: {len(ai_response.strip())}")
+                        return ai_response.strip()
+                    else:
+                        bot.edit_message(chat_id, message_id, "抱歉，我没有收到完整的回复，请稍后再试。")
+                        self.clear_processing_status(user_id)
+                        return "抱歉，我没有收到完整的回复，请稍后再试。"
             else:
-                logger.warning(f"No valid response found in API response. Full response: {data}")
-                bot.edit_message(chat_id, message_id, "抱歉，我没有收到有效的回复，请稍后再试。")
+                logger.warning(f"AI response is empty or None. Raw response: '{ai_response}'")
+                logger.warning(f"Full API response: {data}")
+
+                # 如果内容为空，可能是模型配置问题，尝试提供有用的错误信息
+                error_msg = "模型返回了空响应。这可能是因为：\n• 模型配置问题\n• API密钥权限不足\n• 模型暂时不可用\n\n请稍后再试或联系管理员。"
+                bot.edit_message(chat_id, message_id, error_msg)
                 self.clear_processing_status(user_id)
-                return "抱歉，我没有收到有效的回复，请稍后再试。"
+                return error_msg
 
         except Exception as e:
             logger.error(f"Chat completion error: {e}")
