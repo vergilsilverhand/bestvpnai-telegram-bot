@@ -19,6 +19,9 @@ OPENWEBUI_API_KEY = os.environ.get('OPENWEBUI_API_KEY')
 # 存储用户会话上下文
 user_conversations = defaultdict(list)
 
+# 存储用户消息处理状态
+user_processing_status = {}  # {user_id: {'chat_id': chat_id, 'message_id': message_id, 'status': 'processing'}}
+
 class TelegramBot:
     def __init__(self):
         self.bot_token = TELEGRAM_BOT_TOKEN
@@ -144,24 +147,49 @@ class OpenWebUIClient:
             
         return cleaned
     
-    def stream_chat_completion(self, bot, chat_id, user_id, message, model="xmptest.https://api.perplexity.ai"):
-        """流式处理AI响应并实时更新Telegram消息"""
+    def cancel_processing(self, user_id):
+        """取消用户当前的消息处理"""
+        if user_id in user_processing_status:
+            user_processing_status[user_id]['status'] = 'cancelled'
+            logger.info(f"Cancelled processing for user {user_id}")
+            return True
+        return False
+
+    def is_processing_cancelled(self, user_id):
+        """检查用户的处理是否被取消"""
+        return user_id in user_processing_status and user_processing_status[user_id].get('status') == 'cancelled'
+
+    def set_processing_status(self, user_id, chat_id, message_id):
+        """设置用户处理状态"""
+        user_processing_status[user_id] = {
+            'chat_id': chat_id,
+            'message_id': message_id,
+            'status': 'processing'
+        }
+
+    def clear_processing_status(self, user_id):
+        """清除用户处理状态"""
+        if user_id in user_processing_status:
+            del user_processing_status[user_id]
+
+    def simple_chat_completion(self, bot, chat_id, user_id, message, model="xmptest.https://api.perplexity.ai"):
+        """非流式处理AI响应，一次性发送完整回复"""
         url = f"{self.base_url}/api/chat/completions"
         headers = {
             'Authorization': f'Bearer {self.api_key}',
             'Content-Type': 'application/json'
         }
-        
+
         # 添加用户消息到历史
         self.add_to_conversation(user_id, "user", message)
-        
+
         # 获取完整对话历史
         messages = self.get_conversation_history(user_id)
-        
+
         payload = {
             "model": model,
             "messages": messages,
-            "stream": True,
+            "stream": False,  # 非流式
             "max_tokens": 8000,
             "temperature": 0.7,
             "top_p": 0.9,
@@ -169,136 +197,64 @@ class OpenWebUIClient:
             "presence_penalty": 0,
             "stop": None
         }
-        
-        # 发送初始状态消息
-        status_msg = bot.send_message(chat_id, "🤔 正在思考...")
+
+        # 发送等待状态消息
+        status_msg = bot.send_message(chat_id, "🤔 正在思考中，请稍候...\n\n💡 发送 /cancel 可以取消当前处理")
         if not status_msg:
             return "抱歉，发送消息时出现问题。"
-        
+
         message_id = status_msg['result']['message_id']
-        
+
+        # 设置处理状态
+        self.set_processing_status(user_id, chat_id, message_id)
+
         try:
             logger.info(f"Sending request to OpenWebUI: {url}")
-            
-            response = requests.post(url, headers=headers, json=payload, timeout=600, stream=True)
+
+            response = requests.post(url, headers=headers, json=payload, timeout=600)
+
+            # 检查是否被取消
+            if self.is_processing_cancelled(user_id):
+                bot.edit_message(chat_id, message_id, "❌ 处理已被取消")
+                self.clear_processing_status(user_id)
+                return "处理已被取消"
+
             response.raise_for_status()
-            
-            # 流式处理响应
-            full_response = ""
-            current_text = ""
-            last_update_time = 0
-            
-            for line in response.iter_lines():
-                if line:
-                    line = line.decode('utf-8')
-                    if line.startswith('data: '):
-                        data_str = line[6:]  # 移除 'data: ' 前缀
-                        if data_str.strip() == '[DONE]':
-                            break
-                        try:
-                            data = json.loads(data_str)
-                            if 'choices' in data and len(data['choices']) > 0:
-                                delta = data['choices'][0].get('delta', {})
-                                content = delta.get('content', '')
-                                if content:
-                                    full_response += content
-                                    current_text = self.filter_ai_response(full_response)
-                                    
-                                    # 每0.5秒更新消息
-                                    current_time = time.time()
-                                    if current_time - last_update_time > 0.5 and current_text.strip():
-                                        bot.edit_message(chat_id, message_id, current_text + " ▋")
-                                        last_update_time = current_time
-                        except json.JSONDecodeError:
-                            continue
-            
-            # 最终更新 - 移除光标
-            if current_text.strip():
-                bot.edit_message(chat_id, message_id, current_text)
-                self.add_to_conversation(user_id, "assistant", current_text)
-                logger.info(f"Final response length: {len(current_text)}")
-                return current_text
-            else:
-                bot.edit_message(chat_id, message_id, "抱歉，我没有收到完整的回复，请稍后再试。")
-                return "抱歉，我没有收到完整的回复，请稍后再试。"
-                
+            data = response.json()
+
+            # 检查是否被取消
+            if self.is_processing_cancelled(user_id):
+                bot.edit_message(chat_id, message_id, "❌ 处理已被取消")
+                self.clear_processing_status(user_id)
+                return "处理已被取消"
+
+            if 'choices' in data and len(data['choices']) > 0:
+                ai_response = data['choices'][0].get('message', {}).get('content', '')
+                if ai_response:
+                    # 过滤响应
+                    filtered_response = self.filter_ai_response(ai_response.strip())
+                    if filtered_response:
+                        # 更新消息为最终回复
+                        bot.edit_message(chat_id, message_id, filtered_response)
+                        self.add_to_conversation(user_id, "assistant", filtered_response)
+                        self.clear_processing_status(user_id)
+                        logger.info(f"Response length: {len(filtered_response)}")
+                        return filtered_response
+                    else:
+                        bot.edit_message(chat_id, message_id, "抱歉，我没有收到完整的回复，请稍后再试。")
+                        self.clear_processing_status(user_id)
+                        return "抱歉，我没有收到完整的回复，请稍后再试。"
+
+            bot.edit_message(chat_id, message_id, "抱歉，我没有收到有效的回复，请稍后再试。")
+            self.clear_processing_status(user_id)
+            return "抱歉，我没有收到有效的回复，请稍后再试。"
+
         except Exception as e:
-            logger.error(f"Streaming error: {e}")
-            bot.edit_message(chat_id, message_id, "抱歉，处理您的请求时出现了问题，请稍后再试。")
+            logger.error(f"Chat completion error: {e}")
+            if not self.is_processing_cancelled(user_id):
+                bot.edit_message(chat_id, message_id, "抱歉，处理您的请求时出现了问题，请稍后再试。")
+            self.clear_processing_status(user_id)
             return "抱歉，处理您的请求时出现了问题，请稍后再试。"
-    
-    def chat_completion(self, user_id, message, model="xmptest.https://api.perplexity.ai"):
-        """Send chat completion request to OpenWebUI with conversation context"""
-        url = f"{self.base_url}/api/chat/completions"
-        headers = {
-            'Authorization': f'Bearer {self.api_key}',
-            'Content-Type': 'application/json'
-        }
-        
-        # 添加用户消息到历史
-        self.add_to_conversation(user_id, "user", message)
-        
-        # 获取完整对话历史
-        messages = self.get_conversation_history(user_id)
-        
-        payload = {
-            "model": model,
-            "messages": messages,
-            "stream": True,
-            "max_tokens": 4000,
-            "temperature": 0.7
-        }
-        
-        try:
-            logger.info(f"Sending request to OpenWebUI: {url}")
-            logger.info(f"Messages count: {len(messages)}")
-            response = requests.post(url, headers=headers, json=payload, timeout=120, stream=True)
-            logger.info(f"Response status: {response.status_code}")
-            
-            if response.status_code == 400:
-                logger.error(f"Bad request response: {response.text}")
-                
-            response.raise_for_status()
-            
-            # 处理流式响应
-            full_response = ""
-            for line in response.iter_lines():
-                if line:
-                    line = line.decode('utf-8')
-                    if line.startswith('data: '):
-                        data_str = line[6:]  # 移除 'data: ' 前缀
-                        if data_str.strip() == '[DONE]':
-                            break
-                        try:
-                            data = json.loads(data_str)
-                            if 'choices' in data and len(data['choices']) > 0:
-                                delta = data['choices'][0].get('delta', {})
-                                content = delta.get('content', '')
-                                if content:
-                                    full_response += content
-                        except json.JSONDecodeError:
-                            continue
-            
-            if full_response.strip():
-                # 过滤响应并添加到历史
-                filtered_response = self.filter_ai_response(full_response.strip())
-                if filtered_response:
-                    self.add_to_conversation(user_id, "assistant", filtered_response)
-                    return filtered_response
-                else:
-                    logger.warning("Response filtered out completely")
-                    return "抱歉，我没有收到完整的回复，请稍后再试。"
-            else:
-                logger.warning("No content received from streaming response")
-                return "抱歉，我没有收到完整的回复，请稍后再试。"
-                
-        except requests.exceptions.HTTPError as e:
-            logger.error(f"HTTP error: {e}")
-            logger.error(f"Response content: {e.response.text if hasattr(e, 'response') else 'No response'}")
-            return "抱歉，我现在无法处理您的请求，请稍后再试。"
-        except requests.exceptions.RequestException as e:
-            logger.error(f"Request error: {e}")
-            return "抱歉，我现在无法处理您的请求，请稍后再试。"
 
 bot = TelegramBot()
 openwebui_client = OpenWebUIClient()
@@ -338,8 +294,12 @@ def webhook():
                           "• 直接发送消息与我对话\n" + \
                           "• /start - 开始新的对话（清除历史）\n" + \
                           "• /clear - 清除对话历史\n" + \
+                          "• /cancel - 取消当前的消息处理\n" + \
                           "• /help - 查看帮助信息\n\n" + \
-                          "我会记住我们的对话内容，支持上下文对话！"
+                          "💡 **提示：**\n" + \
+                          "• 我会记住我们的对话内容，支持上下文对话！\n" + \
+                          "• 发送新消息时会自动取消之前的处理\n" + \
+                          "• 处理过程中可以随时使用 /cancel 取消"
             bot.send_message(chat_id, help_message)
             return jsonify({'ok': True})
         
@@ -348,9 +308,24 @@ def webhook():
             openwebui_client.clear_conversation(user_id)
             bot.send_message(chat_id, "✅ 对话历史已清除，我们可以开始新的对话了！")
             return jsonify({'ok': True})
-        
-        # Get streaming response from OpenWebUI with real-time updates
-        ai_response = openwebui_client.stream_chat_completion(bot, chat_id, user_id, user_message)
+
+        # Handle /cancel command
+        if user_message.startswith('/cancel'):
+            if openwebui_client.cancel_processing(user_id):
+                bot.send_message(chat_id, "✅ 已取消当前的消息处理")
+            else:
+                bot.send_message(chat_id, "ℹ️ 当前没有正在处理的消息")
+            return jsonify({'ok': True})
+
+        # 如果用户正在处理消息，自动取消之前的处理
+        if user_id in user_processing_status:
+            logger.info(f"Auto-cancelling previous processing for user {user_id}")
+            openwebui_client.cancel_processing(user_id)
+            # 给用户一个短暂的反馈
+            bot.send_message(chat_id, "⏭️ 已自动取消上一个处理，开始处理新消息...")
+
+        # Get response from OpenWebUI (non-streaming)
+        ai_response = openwebui_client.simple_chat_completion(bot, chat_id, user_id, user_message)
         
         return jsonify({'ok': True})
         
