@@ -404,7 +404,7 @@ class OpenWebUIClient:
             logger.info(f"Message {i}: {msg['role']} - {msg['content'][:50]}...")
 
         # 发送等待状态消息
-        status_msg = bot.send_message(chat_id, "🤔 正在思考中，请稍候...")
+        status_msg = bot.send_message(chat_id, "🤔 正在思考中，请稍候...\n\n💡 *使用BestVPN，解锁更多更强的AI工具：[vp0.org](https://vp0.org)*")
         if not status_msg:
             return "抱歉，发送消息时出现问题。"
 
@@ -511,7 +511,7 @@ def webhook():
                 else:
                     wait_display = f"{user_wait_time} 秒"
 
-                rate_limit_msg = f"⏱️ 您今日的请求次数已用完，请等待 {wait_display} 后再试。\n\n📋 每日限制：5次请求"
+                rate_limit_msg = f"⏱️ 您今日的请求次数已用完，请等待 {wait_display} 后再试。\n\n📋 每日限制：5次请求\n\n💡 *使用BestVPN，解锁更多更强的AI工具：[vp0.org](https://vp0.org)*"
                 bot.send_message(chat_id, rate_limit_msg)
                 logger.warning(f"User {user_id} hit daily rate limit, wait time: {user_wait_time}s")
                 return jsonify({'ok': True})
@@ -519,7 +519,7 @@ def webhook():
             # 检查会话速率限制
             session_allowed, session_wait_time = openwebui_client.check_session_rate_limit(chat_id, user_id)
             if not session_allowed:
-                session_limit_msg = f"🚀 请慢一点！您发送消息太快了，请等待 {session_wait_time} 秒。\n\n💬 会话限制：10秒内最多2条消息"
+                session_limit_msg = f"🚀 请慢一点！您发送消息太快了，请等待 {session_wait_time} 秒。\n\n💬 会话限制：10秒内最多2条消息\n\n💡 *使用BestVPN，解锁更多更强的AI工具：[vp0.org](https://vp0.org)*"
                 bot.send_message(chat_id, session_limit_msg)
                 logger.warning(f"Session {chat_id}_{user_id} hit rate limit, wait time: {session_wait_time}s")
                 return jsonify({'ok': True})
